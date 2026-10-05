@@ -9,7 +9,7 @@ server speaking that protocol works (ollama, llama.cpp, vLLM) whether its URL is
 given with or without the ``/v1`` suffix, and tests inject :class:`MockModelClient`
 — same interface, canned replies, no network.
 
-Determinism: temperature 0 and a fixed ``seed`` are sent on every request.
+Sampling: temperature and seed are sent; hosted responses need not be deterministic.
 """
 from __future__ import annotations
 
@@ -17,10 +17,13 @@ import json
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
 from .config import Config
+
+# Conservative local attempt cap; House counts admitted requests, not every failure.
+MAX_REQUESTS_PER_UNIT = 25
 
 
 def chat_completions_url(model_endpoint: str) -> str:
@@ -44,6 +47,7 @@ class ModelClient(Protocol):
 @dataclass
 class HTTPModelClient:
     config: Config
+    _attempts: int = field(default=0, init=False)
 
     def complete(self, system: str, user: str) -> str:
         if not self.config.model_endpoint:
@@ -60,6 +64,7 @@ class HTTPModelClient:
             ],
             "temperature": self.config.temperature,
             "seed": self.config.seed,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         headers = {"Content-Type": "application/json"}
         if self.config.model_token:
@@ -72,12 +77,20 @@ class HTTPModelClient:
         )
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries):
+            if self._attempts >= MAX_REQUESTS_PER_UNIT:
+                raise RuntimeError(
+                    f"local attempt cap reached ({MAX_REQUESTS_PER_UNIT} per unit)"
+                ) from last_error
+            self._attempts += 1
             try:
                 with urllib.request.urlopen(
                     request, timeout=self.config.timeout_s
                 ) as response:
                     body = json.loads(response.read().decode("utf-8"))
-                return body["choices"][0]["message"]["content"]
+                content = body["choices"][0]["message"]["content"]
+                if not isinstance(content, str) or not content.strip():
+                    raise ValueError("model response content is missing or not text")
+                return content
             except (urllib.error.URLError, KeyError, json.JSONDecodeError) as exc:
                 last_error = exc
                 time.sleep(min(2**attempt, 8))

@@ -1,33 +1,21 @@
-"""`--mock` must produce an answer that could actually be scored.
+"""Executive summary: Offline CLI checks retain exact evidence and complete rows.
 
-The mock used to return a fixed reply carrying `"evidence": []`. The pipeline then did
-exactly what it is built to do -- it grounded the zero quotes it was handed -- and wrote an
-answer whose every row had an empty `claims` array, while the CLI reported "0 grounded
-claims" as though that were a neutral fact.
-
-An empty or absent `claims` on ANY row fails `g1_schema` for the WHOLE submission. Measured
-through the real scorer on the exemplar unit with a resolved outcome and a judge that
-entails, holding everything else identical:
-
-    evidence: [] -> claims: []    participant_failure   -0.27   t4.schema_invalid
-    grounded claim                participant_success   +0.43
-
-So the documented smoke command produced the worst-scoring artifact the benchmark can
-express. These tests pin the fix.
-
-Standard library only, like the pipeline under test.
+Mock values are synthetic wiring controls, not predictive or hosted score evidence.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from baselines.strong_rag_baseline.cli import _mock_reply, main
+from baselines.strong_rag_baseline.cli import _mock_reply, main, run
+from baselines.strong_rag_baseline.client import MockModelClient
 from baselines.strong_rag_baseline.indexer import build_index
 
 _REPO = Path(__file__).resolve().parents[3]
 EXAMPLE_UNIT = _REPO / "units" / "t4-EXAMPLE-eps-beat"
 RANKING_UNIT = _REPO / "units" / "t4-cotpos-202411-us10"
+REGRESSION_UNIT = _REPO / "units" / "t4-auction-btc-202411-us7"
 
 
 def _run_mock(unit: Path, out: Path) -> dict:
@@ -44,7 +32,7 @@ def test_every_row_gets_at_least_one_grounded_claim(tmp_path: Path) -> None:
     empty = [r["entity_id"] for r in answer["entity_predictions"] if not r["claims"]]
     assert not empty, (
         f"rows with no claims: {empty}. An empty claims array on any row fails g1_schema "
-        "for the whole submission (t4.schema_invalid, W = -0.27)"
+        "for the whole submission under the local schema"
     )
 
 
@@ -89,6 +77,38 @@ def test_non_ranking_forecasts_stay_a_visible_placeholder(tmp_path: Path) -> Non
     """
     answer = _run_mock(EXAMPLE_UNIT, tmp_path / "a.json")
     assert [r["point_forecast"] for r in answer["entity_predictions"]] == [0.0]
+
+
+def test_numeric_targets_omit_classification_label(tmp_path: Path) -> None:
+    """A JSON null is not a valid substitute for an inapplicable label field."""
+    for unit in (REGRESSION_UNIT, RANKING_UNIT):
+        answer = _run_mock(unit, tmp_path / f"{unit.name}.json")
+        assert all("label" not in row for row in answer["entity_predictions"])
+
+
+def test_sec_entity_prompt_contains_only_its_own_filings(tmp_path: Path) -> None:
+    """Keep peer-company filings out of an entity's evidence context."""
+    unit = _REPO / "units" / "t4-eps-growth-2024Q3-banks"
+    task = json.loads((unit / "task.json").read_text(encoding="utf-8"))
+    prompts: list[str] = []
+
+    def capture_prompt(system: str, user: str) -> str:
+        prompts.append(user)
+        return _mock_reply(system, user)
+
+    run(
+        unit / "task.json",
+        unit / "corpus",
+        tmp_path / "answer.json",
+        MockModelClient(reply=capture_prompt),
+        top_k=10,
+    )
+
+    assert len(prompts) == len(task["entities"])
+    for entity, prompt in zip(task["entities"], prompts):
+        doc_ids = re.findall(r"doc_id=(\S+) \(doc_date=", prompt)
+        assert doc_ids
+        assert all(doc_id.startswith(f"EDGAR_{entity['cik']}_") for doc_id in doc_ids)
 
 
 def test_a_prompt_with_no_excerpt_cites_nothing(tmp_path: Path) -> None:

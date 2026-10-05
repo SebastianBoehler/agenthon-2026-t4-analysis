@@ -1,0 +1,10 @@
+# Executive summary: Package runtime Python sources only; exclude tests and bytecode.
+# House credentials and the analyze verb are supplied by the organizer at execution.
+FROM python:3.13-slim
+LABEL qfbench2.interface_version="2.0"
+ENV PYTHONDONTWRITEBYTECODE=1
+WORKDIR /app
+COPY baselines/strong_rag_baseline/*.py ./baselines/strong_rag_baseline/
+COPY LICENSE ./LICENSE
+ENTRYPOINT ["python", "-m", "baselines.strong_rag_baseline.cli"]
+CMD ["analyze", "--help"]

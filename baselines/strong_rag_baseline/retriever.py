@@ -1,10 +1,8 @@
 """Embargo-aware BM25 retriever over span-level chunks.
 
 BM25 (Okapi, k1=1.5, b=0.75) implemented in pure Python for determinism and
-zero dependencies. Dense retrieval is deliberately omitted: the eval sandbox's
-restricted network cannot fetch embedding weights at run time, so a lexical index
-keeps the baseline reproducible everywhere -- a dense index is permitted only if
-its weights are vendored into the image. Ties
+zero dependencies. This is a lexical implementation choice; other eligible retrieval methods
+remain open under the artifact policy. Ties
 break by (doc_id, span_start) so ranking is stable across runs and platforms.
 
 Documents whose ``doc_date`` is missing or after the task ``cutoff_date`` are
@@ -58,12 +56,21 @@ class BM25Index:
         n, df = len(self.chunks), self._doc_freq.get(term, 0)
         return math.log(1 + (n - df + 0.5) / (df + 0.5))
 
-    def search(self, query: str, top_k: int) -> list[ScoredChunk]:
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        doc_ids: set[str] | None = None,
+    ) -> list[ScoredChunk]:
+        """Return top chunks, optionally restricted to an explicit source set."""
         q_terms = _tokens(query)
         if not q_terms or not self.chunks:
             return []
         scored: list[ScoredChunk] = []
         for chunk, toks in zip(self.chunks, self._chunk_tokens):
+            if doc_ids is not None and chunk.doc_id not in doc_ids:
+                continue
             if not toks:
                 continue
             tf: dict[str, int] = {}

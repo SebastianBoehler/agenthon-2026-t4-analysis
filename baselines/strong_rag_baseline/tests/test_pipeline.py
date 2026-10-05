@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from pathlib import Path
 
 from baselines.strong_rag_baseline.cli import run
@@ -27,7 +29,7 @@ def make_mock_reply() -> str:
                     "quote": quote,
                     "claim": "Apple announced quarterly results in its press release.",
                 },
-                {  # ungroundable: fabricated quote, must be dropped or chunk-mapped
+                {  # ungroundable: fabricated quote, must be dropped
                     "doc_id": DOC_ID,
                     "quote": "zzz this text appears nowhere zzz",
                     "claim": "A fabricated statement.",
@@ -79,20 +81,22 @@ def test_pipeline_is_deterministic(tmp_path):
     assert first == second
 
 
-def test_off_vocabulary_label_falls_back_deterministically(tmp_path):
+def test_off_vocabulary_label_is_an_error(tmp_path):
     reply = json.loads(make_mock_reply())
     reply["label"] = "moon"
-    answer = run_once(tmp_path, json.dumps(reply))
-    [entity] = answer["entity_predictions"]
-    assert entity["label"] == "beat"  # first allowed label
+    with pytest.raises(ValueError, match="outside the task vocabulary"):
+        run_once(tmp_path, json.dumps(reply))
+    assert not (tmp_path / "answer.json").exists()
 
 
-def test_missing_interval_gets_fallback_band(tmp_path):
+@pytest.mark.parametrize("interval", [None, {"lo": 2, "hi": 1},
+    {"lo": False, "hi": 1}, {"lo": 0, "hi": float("inf")}])
+def test_invalid_interval_is_not_replaced(tmp_path, interval):
     reply = json.loads(make_mock_reply())
-    del reply["interval"]
-    answer = run_once(tmp_path, json.dumps(reply))
-    [entity] = answer["entity_predictions"]
-    assert entity["interval"]["lo"] < entity["interval"]["hi"]
+    reply["interval"] = interval
+    with pytest.raises(ValueError, match="model interval"):
+        run_once(tmp_path, json.dumps(reply))
+    assert not (tmp_path / "answer.json").exists()
 
 
 def test_mock_cli_flag_smoke(tmp_path):

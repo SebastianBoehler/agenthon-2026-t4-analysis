@@ -20,7 +20,7 @@ class Config:
     top_k: int  # retrieved chunks per entity
     timeout_s: float  # per model call
     max_retries: int
-    temperature: float  # fixed at 0 for determinism; env override for experiments
+    temperature: float  # sampling setting; zero does not guarantee hosted determinism
 
     @staticmethod
     def from_env() -> "Config":
@@ -33,6 +33,7 @@ class Config:
             seed=int(os.environ.get("T4_SEED", "20260731")),
             top_k=int(os.environ.get("T4_TOP_K", "10")),
             timeout_s=float(os.environ.get("T4_MODEL_TIMEOUT_S", "60")),
-            max_retries=int(os.environ.get("T4_MODEL_RETRIES", "3")),
+            # One attempt is a default policy; roster size still determines the unit budget.
+            max_retries=int(os.environ.get("T4_MODEL_RETRIES", "1")),
             temperature=float(os.environ.get("T4_TEMPERATURE", "0")),
         )

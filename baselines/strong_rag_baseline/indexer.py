@@ -1,17 +1,19 @@
-"""Corpus indexer: one retrievable chunk per corpus span, with global offsets.
+"""Corpus indexer: bounded retrievable excerpts with exact global offsets.
 
 Corpus documents carry their text as a ``spans`` array (or a flat ``text``
 field). The scorer's offset convention concatenates span texts with a single
 space, so a span that starts at position ``p`` in that concatenation can be
 cited directly as ``(doc_id, p, p + len(span_text))``. Indexing at span
-granularity therefore gives every chunk an exact, citation-ready offset pair
-for free — no separate span search needed for chunk-level citations.
+granularity gives each excerpt an exact, citation-ready offset pair. Long source
+spans are split into overlapping slices before retrieval to bound prompt size.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
+
+from .bounded_spans import spans
 
 _MANIFEST_NAME = "manifest.json"
 
@@ -51,18 +53,20 @@ def build_index(corpus_dir: str | Path) -> IndexedCorpus:
             continue
         doc = json.loads(path.read_text(encoding="utf-8"))
         doc_id = doc.get("doc_id", path.stem)
+        if doc_id != path.stem:
+            raise ValueError(f"corpus document identity disagrees with filename: {path.name}")
         doc_date = doc.get("doc_date")
         offset = 0
         parts: list[str] = []
         for text in _iter_span_texts(doc):
-            if text:
+            for start, end in spans(text):
                 chunks.append(
                     Chunk(
                         doc_id=doc_id,
                         doc_date=doc_date,
-                        span_start=offset,
-                        span_end=offset + len(text),
-                        text=text,
+                        span_start=offset + start,
+                        span_end=offset + end,
+                        text=text[start:end],
                     )
                 )
             parts.append(text)

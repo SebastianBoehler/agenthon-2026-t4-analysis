@@ -4,8 +4,8 @@ Model-supplied offsets are never trusted: the model returns a *quote*, and this
 module finds that quote as an exact substring of the cited document's joined
 text, emitting real ``(span_start, span_end)`` offsets. If the quote cannot be
 located exactly (after a length-preserving punctuation normalization), the
-caller falls back to the retrieved chunk's known-good offsets or drops the
-claim — a fabricated span must never reach the answer.
+caller drops the claim. Another passage is never substituted for a missing
+quotation; this does not determine whether the claim itself is false.
 
 Normalization is strictly one-to-one per character (curly quotes/dashes to
 ASCII), so offsets found in normalized text are valid in the original.

@@ -1,24 +1,24 @@
-"""Per-entity orchestration: retrieve → reason → verify spans → assemble claims.
+"""Executive summary: Retrieve admitted evidence and emit model-supplied predictions.
 
-The pipeline is intentionally strict about citations: a claim survives only if
-its quote resolves to an exact span in the cited document (or, failing that, if
-the quote's source chunk is identifiable so the chunk's own offsets can stand
-in). Claims that cannot be grounded are dropped — an ungrounded claim risks the
-faithfulness gate, while a dropped one merely loses a little coverage.
+Unmatched quotations are dropped; offsets never substitute a different passage.
+Labels and interval bounds are validated rather than fabricated. Exact quotation
+matching is this agent's engineering policy, not proof that a claim is true.
 """
 from __future__ import annotations
 
 import json
-import re
+import math
+import unicodedata
 from dataclasses import dataclass
 
+from .claim_limits import MAX_CLAIM_CHARS, MAX_CITATION_CHARS
 from .client import ModelClient
-from .indexer import Chunk, IndexedCorpus
+from .indexer import IndexedCorpus
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 from .retriever import BM25Index
 from .span_finder import find_span
 
-_JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
+_MODEL_FIELDS = {"label", "point_forecast", "interval", "evidence", "rank"}
 
 #: Query terms appended to every entity query — steer retrieval toward result
 #: and outlook language regardless of family.
@@ -33,11 +33,18 @@ class EntityResult:
 
 
 def _parse_model_json(raw: str) -> dict:
-    """Extract the first JSON object from the model reply (tolerates fences)."""
-    match = _JSON_BLOCK.search(raw)
-    if match is None:
-        raise ValueError("model reply contains no JSON object")
-    return json.loads(match.group(0))
+    """Extract a prediction object from a possibly reasoning-prefixed reply."""
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(raw):
+        if char != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(raw, start)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and _MODEL_FIELDS.intersection(parsed):
+            return parsed
+    raise ValueError("model reply contains no prediction JSON object")
 
 
 def _entity_query(entity: dict) -> str:
@@ -51,15 +58,11 @@ def _entity_query(entity: dict) -> str:
 def _ground_claims(
     evidence: list[dict],
     corpus: IndexedCorpus,
-    retrieved: list[Chunk],
+    admitted_doc_ids: set[str],
 ) -> tuple[list[dict], int]:
     """Map model evidence to exact-span claims; count what had to be dropped."""
     claims: list[dict] = []
     dropped = 0
-    retrieved_by_doc: dict[str, list[Chunk]] = {}
-    for chunk in retrieved:
-        retrieved_by_doc.setdefault(chunk.doc_id, []).append(chunk)
-
     for item in evidence:
         if not isinstance(item, dict):
             dropped += 1
@@ -68,19 +71,20 @@ def _ground_claims(
         quote = str(item.get("quote", ""))
         claim_text = str(item.get("claim", "")).strip()
         doc_text = corpus.doc_texts.get(doc_id)
-        if doc_text is None or not claim_text:
+        if (doc_id not in admitted_doc_ids or doc_text is None or not claim_text
+                or len(unicodedata.normalize("NFC", claim_text).strip()) > MAX_CLAIM_CHARS
+                or len(quote.strip()) > MAX_CITATION_CHARS):
             dropped += 1
             continue
 
         span = find_span(doc_text, quote)
         if span is None:
-            # Fallback: cite the retrieved chunk the quote most plausibly came
-            # from (longest token overlap). Chunk offsets are known-good.
-            chunk = _best_chunk(quote, retrieved_by_doc.get(doc_id, []))
-            if chunk is None:
-                dropped += 1
-                continue
-            span = (chunk.span_start, chunk.span_end)
+            dropped += 1
+            continue
+
+        if span[1] - span[0] > MAX_CITATION_CHARS:
+            dropped += 1
+            continue
 
         claims.append(
             {
@@ -93,29 +97,15 @@ def _ground_claims(
     return claims, dropped
 
 
-def _best_chunk(quote: str, chunks: list[Chunk]) -> Chunk | None:
-    q_tokens = set(quote.lower().split())
-    if not q_tokens:
-        return None
-    best: tuple[int, Chunk] | None = None
-    for chunk in chunks:
-        overlap = len(q_tokens & set(chunk.text.lower().split()))
-        if best is None or overlap > best[0]:
-            best = (overlap, chunk)
-    return best[1] if best and best[0] > 0 else None
-
-
-def _safe_interval(parsed: dict, level: float, point: float | None) -> dict:
-    interval = parsed.get("interval") or {}
+def _model_interval(parsed: dict, level: float) -> dict:
+    interval = parsed.get("interval")
+    if not isinstance(interval, dict):
+        raise ValueError("model interval must contain numeric lo and hi")
     lo, hi = interval.get("lo"), interval.get("hi")
-    if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and lo <= hi:
-        return {"level": level, "lo": float(lo), "hi": float(hi)}
-    # Fallback: wide symmetric band around the point forecast (or zero). A missing
-    # lo/hi is not a per-entity coverage penalty -- it fails g1_schema and the WHOLE
-    # submission is scored t4.schema_invalid at W = -0.27 -- so any sane band beats none.
-    center = float(point) if isinstance(point, (int, float)) else 0.0
-    half = max(abs(center) * 0.5, 1.0)
-    return {"level": level, "lo": center - half, "hi": center + half}
+    if (any(isinstance(v, bool) or not isinstance(v, (int, float))
+            or not math.isfinite(v) for v in (lo, hi)) or lo > hi):
+        raise ValueError("model interval must contain finite ordered lo and hi")
+    return {"level": level, "lo": float(lo), "hi": float(hi)}
 
 
 def run_entity(
@@ -125,8 +115,17 @@ def run_entity(
     corpus: IndexedCorpus,
     client: ModelClient,
     top_k: int,
+    admitted_doc_ids: set[str],
 ) -> EntityResult:
-    retrieved = [s.chunk for s in index.search(_entity_query(entity), top_k)]
+    # Admission labels are authoritative; document-name conventions add no rule.
+    doc_ids = {chunk.doc_id for chunk in index.chunks} & admitted_doc_ids
+    if not doc_ids:
+        raise ValueError(f"no admitted pre-cutoff evidence for entity {entity['entity_id']}")
+    retrieved = [
+        s.chunk for s in index.search(_entity_query(entity), top_k, doc_ids=doc_ids)
+    ]
+    if not retrieved:
+        raise ValueError(f"no matching admitted evidence for entity {entity['entity_id']}")
     raw = client.complete(SYSTEM_PROMPT, build_user_prompt(task, entity, retrieved))
     parsed = _parse_model_json(raw)
 
@@ -134,23 +133,30 @@ def run_entity(
     labels = target.get("labels") or []
     label = parsed.get("label")
     if labels and label not in labels:
-        label = labels[0]  # deterministic fallback for off-vocabulary labels
+        raise ValueError(f"model label {label!r} is outside the task vocabulary")
 
     point = parsed.get("point_forecast")
-    point_value = float(point) if isinstance(point, (int, float)) else None
+    if point is not None and (isinstance(point, bool)
+            or not isinstance(point, (int, float)) or not math.isfinite(point)):
+        raise ValueError("model point_forecast must be finite numeric or null")
+    if target.get("type") in {"regression", "ranking"} and point is None:
+        raise ValueError("numeric target requires a model point_forecast")
+    point_value = float(point) if point is not None else None
     claims, dropped = _ground_claims(
-        parsed.get("evidence") or [], corpus, retrieved
+        parsed.get("evidence") or [], corpus, doc_ids
     )
+
+    if not claims:
+        raise ValueError(f"no admitted grounded claims for entity {entity['entity_id']}")
 
     prediction: dict = {
         "entity_id": entity.get("entity_id", ""),
-        "label": label,
         "point_forecast": point_value,
-        "interval": _safe_interval(
-            parsed, task.get("interval_level", 0.90), point_value
-        ),
+        "interval": _model_interval(parsed, task.get("interval_level", 0.90)),
         "claims": claims,
     }
+    if labels:
+        prediction["label"] = label
     if target.get("type") == "ranking" and isinstance(parsed.get("rank"), int):
         prediction["rank"] = parsed["rank"]
     return EntityResult(prediction=prediction, dropped_claims=dropped, model_raw=raw)

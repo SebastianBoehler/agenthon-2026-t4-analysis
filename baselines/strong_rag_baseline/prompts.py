@@ -29,7 +29,7 @@ _TARGET_INSTRUCTIONS = {
         '"label" may be null.'
     ),
     "ranking": (
-        'Set "rank" to this entity\'s predicted rank (1 = highest). '
+        'If supplying "rank", use the direction specified in the task prompt. '
         '"point_forecast" is the predicted metric value.'
     ),
 }
@@ -39,7 +39,9 @@ def build_user_prompt(
     task: dict, entity: dict, retrieved: list[Chunk]
 ) -> str:
     target = task.get("target", {})
-    target_type = target.get("type", "classification")
+    target_type = target.get("type")
+    if target_type not in _TARGET_INSTRUCTIONS:
+        raise ValueError(f"unsupported target type: {target_type!r}")
     lines: list[str] = []
 
     lines.append(f"TASK: {task.get('prompt', '')}")
@@ -47,6 +49,10 @@ def build_user_prompt(
     lines.append(f"TARGET: {target.get('name', '')} ({target_type})")
     if target.get("labels"):
         lines.append(f"ALLOWED LABELS: {', '.join(target['labels'])}")
+    if target_type == "classification" and target.get("label_assertions"):
+        lines.append("LABEL ASSERTIONS (from task.json): " + json.dumps(
+            target["label_assertions"], ensure_ascii=False
+        ))
     interval_level = task.get("interval_level", 0.90)
 
     lines.append("\nENTITY:")
@@ -81,7 +87,7 @@ def build_user_prompt(
         "\nRespond with ONE JSON object of this shape (no markdown fences, no prose):"
     )
     lines.append(json.dumps(schema, indent=2))
-    lines.append(f"\n{_TARGET_INSTRUCTIONS.get(target_type, _TARGET_INSTRUCTIONS['classification'])}")
+    lines.append(f"\n{_TARGET_INSTRUCTIONS[target_type]}")
     lines.append(
         f'The "interval" must be your {int(interval_level * 100)}% prediction interval for the '
         "numeric target: wide enough that you expect the realized value to fall inside it "

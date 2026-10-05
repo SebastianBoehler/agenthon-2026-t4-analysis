@@ -24,6 +24,7 @@ import re
 import sys
 from pathlib import Path
 
+from .admission import load_admission
 from .agent import run_entity
 from .client import HTTPModelClient, MockModelClient, ModelClient
 from .config import Config
@@ -31,33 +32,8 @@ from .formatter import build_answer
 from .indexer import build_index
 from .retriever import BM25Index
 
-# --------------------------------------------------------------------------- #
-# --mock                                                                      #
-# --------------------------------------------------------------------------- #
-# The mock used to return a fixed reply carrying `"evidence": []`. The pipeline then
-# worked exactly as designed -- it grounded the zero quotes it was given -- and wrote an
-# answer whose every row had an empty `claims` array. That is not a weak answer: an empty
-# or absent `claims` on ANY row fails `g1_schema` for the WHOLE submission, scored
-# `t4.schema_invalid` at `W = -0.27`. So the documented smoke command produced the
-# worst-scoring artifact the benchmark can express, and reported "0 grounded claims" as
-# though that were a neutral fact.
-#
-# The mock now answers from the prompt it is handed, which is its only channel: it quotes
-# a verbatim slice of the first retrieved excerpt, so the quote grounds to a real span
-# through the same `find_span` path a real model's quote takes. `--mock` therefore
-# exercises retrieval -> prompt -> parse -> ground -> assemble end to end, which is what
-# "runnable end to end" was always meant to claim.
-#
-# It is still a stub and does not predict: `point_forecast` is 0.0, because a number a stub
-# invented is not a forecast and pretending otherwise reads as one. The single exception is
-# RANKING units, where the scorer reads `point_forecast` and nothing else, so an identical
-# vector is the degenerate answer whose score depends on the sealed roster order rather than
-# on the prediction (public #47). There the stub echoes one of the entity's own features --
-# not because the number means anything, but so that no shipped code here models that shape.
-# Echoing a feature on the other target types would be worse than 0.0, not better: on the
-# EPS exemplar the first numeric feature is `mktcap_bn`, and emitting 2650.0 as a forecast
-# of a ~1.50 EPS looks like a real prediction that is badly wrong, rather than an obvious
-# placeholder.
+# --mock quotes prompt excerpts and uses synthetic values only for wiring checks.
+# It never measures forecast quality or supplies a production rescue answer.
 
 #: `[1] doc_id=... (doc_date=...)` followed by the excerpt in triple quotes, as
 #: `prompts.build_user_prompt` emits it.
@@ -88,13 +64,7 @@ def _verbatim_quote(excerpt: str) -> str:
 
 
 def _mock_reply(system: str, user: str) -> str:
-    """Answer the prompt from the prompt: quote the first excerpt it offers.
-
-    Returns the same JSON shape `prompts.build_user_prompt` asks a real model for, so it
-    travels the identical parse-and-ground path. With no excerpt to quote -- a unit where
-    retrieval returned nothing -- it emits no evidence, which is the honest answer and
-    still the one that fails `g1_schema`. That is a property of the unit, not of the mock.
-    """
+    """Return synthetic test values and an exact quote from the supplied prompt."""
     del system  # the stub does not read its instructions
     match = _EXCERPT_RE.search(user)
     evidence = []
@@ -140,10 +110,13 @@ def run(
     top_k: int,
 ) -> dict:
     task = json.loads(task_path.read_text(encoding="utf-8"))
+    admission = load_admission(corpus_dir.parent)
     corpus = build_index(corpus_dir)
     index = BM25Index(corpus.chunks, task["cutoff_date"])
     results = [
-        run_entity(task, entity, index, corpus, client, top_k)
+        run_entity(task, entity, index, corpus, client, top_k,
+                   {doc_id for doc_id, ids in admission.items()
+                    if ids is None or entity["entity_id"] in ids})
         for entity in task.get("entities", [])
     ]
     answer = build_answer(task, results, corpus)
