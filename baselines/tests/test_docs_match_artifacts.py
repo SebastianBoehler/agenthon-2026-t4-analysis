@@ -324,7 +324,7 @@ def test_guard2_catches_its_own_exemplars() -> None:
 #: Every ``T4_*`` entry must be read by shipped code (see the test below).
 _LOCAL_ENV_ALLOWLIST = {
     "MODEL_ID",  # strong-RAG local-dev fallback for MODEL_NAME (H6 fix)
-    "MODEL_TOKEN",  # strong-RAG local-dev bearer token; not harness-injected
+    "MODEL_TOKEN",  # per-unit injected bearer; optional for local diagnostic servers
     "QFBENCH_GPU_DEVICE",  # worker-side GPU pin, documented in the GPU caveats
     "TRANSFORMERS_CACHE",  # judge model-cache override, local runs
     "PYTHONPATH",  # smoke-run requirement documented in README
