@@ -32,3 +32,15 @@ def test_degenerate_probability_band_stays_in_bounds(point):
     forecast = combine([sample], "classification", unit_interval=True)
     assert 0.0 <= forecast.lo <= point <= forecast.hi <= 1.0
     assert forecast.lo < forecast.hi
+
+
+def test_pending_transaction_is_evidence_not_completed_event():
+    from baselines.vector_agent.prompts import _type_rules
+    from baselines.vector_agent.unit import load_unit
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    unit = load_unit(root / "units/t4-credit-event-2023/task.json",
+                     root / "units/t4-credit-event-2023/corpus")
+    rules = _type_rules(unit)
+    assert "completion probability, not an event already met" in rules
+    assert "forecast window" in rules

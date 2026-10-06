@@ -24,7 +24,7 @@ class FakeChat:
         self.rng = random.Random(seed)
         self.prompts: list[str] = []
 
-    def complete(self, system, user, *, temperature, seed, max_tokens, timeout):
+    def complete(self, system, user, *, temperature, seed, max_tokens, timeout, thinking=False):
         with self.lock:
             idx = self.calls
             self.calls += 1

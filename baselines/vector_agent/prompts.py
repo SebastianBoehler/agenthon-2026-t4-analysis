@@ -5,6 +5,7 @@ import json
 from datetime import date
 
 from .evidence import Passage
+from .tables import summarize
 from .unit import Unit
 
 SYSTEM = (
@@ -62,7 +63,11 @@ def _type_rules(unit: Unit) -> str:
             "- point_forecast, lo, hi: the numeric quantity the task asks you to forecast, in the "
             "task's units (for example the EPS value, the abnormal return in percent, the revised "
             "value, or the event probability when the task asks for a probability). Keep label "
-            "and point_forecast consistent with the label definitions."
+            "and point_forecast consistent with the label definitions.\n"
+            "- Apply the label definitions literally: an event label is met when ANY condition it "
+            "lists is expected to occur within the task’s forecast window. An announced or pending "
+            "transaction is evidence about completion probability, not an event already met. A "
+            "comparison label compares exactly the quantities it names."
         )
     if tt == "ranking":
         return (
@@ -77,40 +82,64 @@ def _type_rules(unit: Unit) -> str:
 _METHOD = """\
 How to forecast:
 1. Baseline. For each entity state the naive baseline: carry the latest pre-cutoff value of the \
-same quantity forward. If the table gives a prior value of the target quantity (the previous \
-print, the prior-period value, a trailing change of the same kind), that value is the baseline; \
-otherwise use no change for a change target, the latest observed print for a level or rate, or \
-the base rate for an event. Your forecast is scored relative to that baseline: you gain only by \
-being closer to the outcome.
+same quantity forward. If the entity's table row itself gives a value of the target quantity for \
+an earlier period (the previous print, a trailing change of the same kind as the target), that \
+value is the baseline. Otherwise use no change: zero for a change or growth target (the level \
+stays at the table's base value), the latest observed print for a level or rate. Figures you \
+read or compute from the excerpts are signals, not the baseline. For a label about a direction \
+or an event, the baseline is the base rate: how often each label has occurred for comparable \
+cases in the history shown (a single latest observation is a noisy guide). Your forecast is \
+scored relative to that baseline: you gain only by being closer to the outcome.
 2. Signals. Work through the drivers the task names and what the evidence says about each: \
 trends, mean reversion, announced or scheduled information, positioning, guidance, solvency. \
 Turn them into an expected direction and size over the forecast horizon.
-3. Forecast = baseline + the expected change implied by the evidence. When the evidence points \
+3. Values in the entity table are authoritative. For a target defined as a change, growth or \
+comparison relative to a stated base (for example growth versus a prior-year value given in the \
+table), copy that base value from the table row, forecast the level of the quantity for the \
+target period, then compute the change against exactly that base. The excerpts also discuss \
+other periods (for example the latest quarter versus its own prior-year quarter): never \
+substitute those values for the table's base. Forecast the level from the most recent levels of \
+the quantity (for example the latest reported quarters), not by applying a growth rate measured \
+over a different period or against a different base.
+4. Forecast = baseline + the expected change implied by the evidence. When the evidence points \
 one way, move by your best estimate of the size; do not shrink toward the baseline out of \
 caution. When the evidence is balanced, stay near the baseline.
-4. Keep the cross-section consistent: entities that share drivers should move coherently.
-5. Uncertainty. Estimate sigma, the standard deviation of the outcome around your forecast over \
-this horizon. When the evidence shows past values of the quantity (or its changes), sigma should \
-be at least their typical spread over comparable windows. For market prices, yields and spreads, \
+5. Keep the cross-section consistent: entities that share drivers should move coherently.
+6. Uncertainty. Estimate sigma, the standard deviation of the outcome around your forecast over \
+this horizon: how far outcomes of this kind typically land from what is already known at the \
+cutoff. Measure it from comparable past surprises in the evidence: for a revised estimate of an \
+already published value, the typical revision size; for a next print, the typical \
+print-to-print change; for an outcome over a horizon, the typical change over windows of that \
+length. Do not use the spread of levels across unrelated periods. When a COMPUTED summary gives the \
+change sd over the horizon for the series you forecast, that is the floor for sigma (convert units, \
+e.g. percentage points to basis points). For market prices, yields and spreads, \
 moves over weeks or months are much larger than daily noise: scale daily volatility by the \
 square root of the number of trading days in the horizon; around scheduled events (earnings \
-releases, policy meetings, data releases) moves are several times a normal day's. Then lo and hi are about \
+releases, policy meetings, data releases) moves are several times a normal day's: an individual \
+stock's one-day reaction to its own earnings release commonly moves 3 to 10 percent. Then lo and hi are about \
 forecast - 1.645*sigma and forecast + 1.645*sigma (skew them if the risks are one-sided). The \
 interval is scored by its width plus 20 times any distance by which the outcome falls outside \
 it, so it must contain the outcome 9 times out of 10. The most common error is a sigma that is \
 too small: large moves happen.
-6. Forecast exactly the quantity the task defines (GAAP versus adjusted, first print versus \
+7. Forecast exactly the quantity the task defines (GAAP versus adjusted, first print versus \
 revised, level versus change, percent versus basis points); the prior value in the table shows \
 its scale. Numbers are plain JSON numbers in the target's units: no percent signs, no leading \
 plus signs, no thousands separators."""
 
 
-def _row_schema(unit: Unit) -> str:
+def _words(n_requested: int) -> int:
+    """Room for reasoning in each row: more when a reply covers few entities."""
+    return 120 if n_requested <= 2 else 70 if n_requested <= 6 else 45
+
+
+def _row_schema(unit: Unit, words: int) -> str:
     fields = [
         '"entity_id": "<id>"',
-        '"analysis": "<at most 50 words: target quantity and units, baseline, key signals, expected change, typical move size>"',
+        f'"analysis": "<at most {words} words: target quantity and units, base value copied from the table if the target is relative to one, baseline, key signals, expected level and change, typical move size>"',
         '"baseline": <number or null>',
         '"point_forecast": <number>',
+        '"level_forecast": <number or null: for a target that is a change or growth relative to a base value, your forecast of the underlying level for the target period>',
+        '"base_value": <number or null: that base value copied exactly from the table row>',
         '"sigma": <number>',
         '"lo": <number>',
         '"hi": <number>',
@@ -140,16 +169,34 @@ def unit_prompt(unit: Unit, docs_text: list[tuple[str, str, str]], focus: list[s
     parts.append(
         "OUTPUT: exactly one JSON object of the form {\"predictions\": [ROW, ...]} with one ROW for "
         f"each of the {len(wanted)} requested entities, every entity_id exactly once, in table order. "
-        "ROW = " + _row_schema(unit)
+        "ROW = " + _row_schema(unit, _words(len(wanted)))
     )
     return "\n\n".join(parts)
+
+
+def horizon_days(unit: Unit) -> int | None:
+    try:
+        days = (date.fromisoformat(str(unit.task["resolution_date"]))
+                - date.fromisoformat(str(unit.task["cutoff_date"]))).days
+    except (KeyError, ValueError):
+        return None
+    return days if days > 0 else None
+
+
+def with_stats(text: str, horizon: int | None = None) -> str:
+    """A whole document plus the arithmetic summary of its tables (never quotable)."""
+    stats = summarize(text, horizon)
+    if not stats:
+        return text
+    return (text.rstrip() + "\n[COMPUTED FROM THE TABLES ABOVE: arithmetic summary added for you, "
+            "not part of the document; do not quote it]\n" + stats)
 
 
 def unit_docs_full(unit: Unit) -> list[tuple[str, str, str]]:
     out = []
     for d in sorted(unit.docs.values(), key=lambda d: (d.entity_ids is not None, d.doc_id)):
         header = f"date {d.doc_date} | applies to: {_applies(unit, d.entity_ids)} | {d.title}"
-        out.append((d.doc_id, header, d.text))
+        out.append((d.doc_id, header, with_stats(d.text, horizon_days(unit))))
     return out
 
 
@@ -159,7 +206,8 @@ def unit_docs_excerpts(unit: Unit, per_entity: dict[str, list[Passage]]) -> list
         for p in passages:
             d = unit.docs[p.doc_id]
             header = f"date {d.doc_date} | applies to: {_applies(unit, d.entity_ids)} | excerpt for {eid}"
-            out.append((p.doc_id, header, p.text))
+            whole = p.start == 0 and p.end == len(d.text)
+            out.append((p.doc_id, header, with_stats(p.text, horizon_days(unit)) if whole else p.text))
     return out
 
 
@@ -175,15 +223,16 @@ def entity_prompt(unit: Unit, entity: dict, passages: list[Passage]) -> str:
     ]
     for i, p in enumerate(passages, 1):
         d = unit.docs[p.doc_id]
-        parts.append(f"[E{i}] {p.doc_id} | date {d.doc_date} | {d.title}\n{p.text}")
+        whole = p.start == 0 and p.end == len(d.text)
+        parts.append(f"[E{i}] {p.doc_id} | date {d.doc_date} | {d.title}\n{with_stats(p.text, horizon_days(unit)) if whole else p.text}")
     parts.append(_METHOD)
     parts.append("Field rules:\n" + _type_rules(unit))
-    parts.append(f"OUTPUT: exactly one JSON object for entity {eid}: " + _row_schema(unit))
+    parts.append(f"OUTPUT: exactly one JSON object for entity {eid}: " + _row_schema(unit, _words(1)))
     return "\n\n".join(parts)
 
 
-def reasons_prompt(unit: Unit, answers: list[dict], candidates: list[tuple[str, str]]) -> str:
-    """``candidates`` holds (key, verbatim text) premises the reasons must be built on."""
+def reasons_prompt(unit: Unit, answers: list[dict], candidates: list[tuple[str, str, str, str]]) -> str:
+    """``candidates`` holds (key, verbatim text, doc_id, entities it applies to) premises."""
     parts = [
         "TASK\n" + str(unit.task.get("prompt", "")),
         _target_block(unit),
@@ -191,15 +240,17 @@ def reasons_prompt(unit: Unit, answers: list[dict], candidates: list[tuple[str, 
         + "\n".join(json.dumps(a, ensure_ascii=False) for a in answers),
         "CANDIDATE PREMISES (verbatim passages from the evidence)",
     ]
-    for key, text in candidates:
-        parts.append(f"[{key}] {text}")
+    for key, text, doc_id, applies in candidates:
+        parts.append(f"[{key}] (from {doc_id}; applies to {applies}) {text}")
     parts.append(
         "Write up to 3 reasons that explain the submitted forecasts, strongest first. Each reason "
-        "rests on ONE candidate premise. mechanism (at most 60 words) explains why that fact moves "
-        "the forecast; answer_implication (at most 50 words) states what it implies for the "
-        "submitted answer and names the entity_ids it concerns and their submitted labels or "
-        "values. Together the reasons should cover the main drivers across the entities. Use "
-        "plain prose; do not mention files, paths, or scoring."
+        "rests on ONE candidate premise. Prefer reasons about the main drivers the task names, each "
+        "covering as many entities as it truly applies to; together the reasons should cover the "
+        "drivers behind most of the forecasts. mechanism (at most 60 words) explains why that fact "
+        "moves the forecast: use only figures the premise states, and attribute them only to the "
+        "entity the premise is about. answer_implication (at most 50 words) names the entity_ids "
+        "it concerns with their submitted labels or point forecasts as shown above, and the "
+        "direction the fact pushes them. Use plain prose; do not mention files, paths, or scoring."
     )
     parts.append(
         'OUTPUT: exactly one JSON object {"reasons": [{"premise": "<candidate key, e.g. R3>", '

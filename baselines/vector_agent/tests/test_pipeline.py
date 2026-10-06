@@ -187,3 +187,49 @@ def test_thirty_row_rosters_fit_the_request_budget(source, tmp_path):
     answer, chat, budget, _ = _run(unit, tmp_path)
     assert len(answer["entity_predictions"]) == 30
     assert budget.used <= 24
+
+
+def test_table_summary_reports_spreads_and_revisions():
+    from baselines.vector_agent.tables import summarize
+    text = ("x\nmonth | as_of_2024-01-01 | as_of_2024-02-01 | as_of_2024-03-01\n"
+            "2023-10 | 100 | 101 | 101\n2023-11 | 102 | 103 | 104\n2023-12 | -- | 105 | 104\n"
+            "2024-01 | -- | -- | 107\nNOTES")
+    out = summarize(text)
+    assert "revisions between adjacent dated columns" in out and "n=4" in out
+    assert summarize("no tables here") == ""
+
+
+def test_band_edge_far_beyond_own_sigma_is_repaired():
+    raw = json.dumps({"entity_id": "A", "point_forecast": 289300, "sigma": 300, "lo": 28492, "hi": 290100})
+    s = parse_predictions(raw, target_type="regression", labels=[], entity_ids={"A"}, weight=1, source="t")[0]
+    assert s.lo == pytest.approx(289300 - 1.6448536269514722 * 300) and s.hi == 290100
+
+
+def test_growth_is_recomputed_from_level_and_table_base():
+    from baselines.vector_agent.consistency import ground_growth, percent_growth_target
+    task = json.loads((ROOT / "units" / "t4-eps-growth-2024Q3-banks" / "task.json").read_text())
+    assert percent_growth_target(task)
+    row = next(e for e in task["entities"] if e["entity_id"] == "GS")
+    s = _sample("GS", 150.0, 100.0, 200.0)
+    s.level, s.base = 8.5, 5.47
+    ground_growth(s, row)
+    assert s.point == pytest.approx((8.5 / 5.47 - 1) * 100) and s.hi - s.lo == pytest.approx(100.0)
+    t = _sample("GS", 150.0, 100.0, 200.0)
+    t.level, t.base = 8.5, 3.08  # a base from the wrong period: the row's only number is used
+    assert ground_growth(t, row).point == pytest.approx((8.5 / 5.47 - 1) * 100)
+    u = _sample("GS", 150.0, 100.0, 200.0)
+    u.level, u.base = 8.5, 3.08
+    assert ground_growth(u, dict(row, other_number=1.0)).point == 150.0  # ambiguous: left alone
+    other = json.loads((ROOT / "units" / "t4-fomc-curve-20240918" / "task.json").read_text())
+    assert not percent_growth_target(other)
+
+
+def test_probability_of_a_binary_event_gets_the_score_optimal_band():
+    from baselines.vector_agent.aggregate import binary_outcome_band, combine
+    assert binary_outcome_band(0.3) == (0.0, 1.0)
+    assert binary_outcome_band(0.02) == (0.0, 0.02)
+    assert binary_outcome_band(0.97) == (0.97, 1.0)
+    fc = combine([_sample("A", 0.3, 0.1, 0.5, "no_event")] * 3, "classification", unit_interval=True)
+    assert (fc.lo, fc.hi) == (0.0, 1.0)
+    fc = combine([_sample("A", 0.01, 0.0, 0.03, "no_event")] * 3, "classification", unit_interval=True)
+    assert fc.lo == 0.0 and fc.hi == pytest.approx(0.01)

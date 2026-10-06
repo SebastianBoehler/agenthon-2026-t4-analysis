@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from . import prompts
 from .aggregate import Forecast, combine
+from .consistency import ground_growth, percent_growth_target
 from .claims import build_reasons, entity_claims, reason_candidates
 from .evidence import Passage, entity_passages
 from .house import Budget, BudgetExhausted, Chat
@@ -21,11 +22,14 @@ from .parse import Sample, extract_json, parse_predictions
 from .unit import Unit
 
 FULL_CONTEXT_CHARS = 110_000
-ENTITY_EVIDENCE_CHARS = 36_000
+ENTITY_EVIDENCE_CHARS = 44_000
 QUICK_EVIDENCE_CHARS = 48_000
-UNIT_SAMPLES = 5
-MAX_ENTITY_SAMPLES = 4
-GROUP_MAX_FULL = 12
+GROUP_EVIDENCE_CHARS = 80_000
+THINKING = False  # Nemotron 3 Super reasons before answering (the House default); costs output tokens
+UNIT_SAMPLES = 3 if THINKING else 9
+MAX_ENTITY_SAMPLES = 3 if THINKING else 5
+RETRIEVAL_GROUPS_SMALL = 5  # rosters of up to 10 rows: at most 5 retrieval groups, so each gets ~5 samples
+GROUP_MAX_FULL = 4 if THINKING else 12
 MAX_RETRIEVAL_GROUPS = 10
 REASONS_RESERVE = 1
 
@@ -65,9 +69,10 @@ class Planner:
     """Decides the next House call. Work is organised in groups of entities that share one prompt.
 
     Full-context mode: groups of at most 12 entities over the whole corpus, sampled until every
-    entity has UNIT_SAMPLES forecasts. Retrieval mode: one group per entity (excerpts for that
-    entity) when the roster has at most 10 rows, otherwise at most 10 groups of several entities,
-    sampled in rounds; spare budget then goes to the entities whose samples disagree most.
+    entity has UNIT_SAMPLES forecasts. Retrieval mode: at most 5 groups for rosters of up to 10
+    rows (one or two entities per prompt, each with its own excerpts), otherwise at most 10 groups,
+    sampled in rounds; with single-entity groups, spare budget goes to the entities whose samples
+    disagree most.
     """
 
     def __init__(self, unit: Unit, seed: int):
@@ -83,6 +88,8 @@ class Planner:
         self.passages: dict[str, list[Passage]] = {}
         self.entity_prompts: dict[str, str] = {}
         self.unit_prompt: str | None = None
+        self.growth = percent_growth_target(unit.task)
+        self.rows = {str(e["entity_id"]): e for e in unit.entities}
         n = max(1, len(self.ids))
         if self.full:
             self.groups = _chunks(self.ids, GROUP_MAX_FULL)
@@ -93,7 +100,8 @@ class Planner:
             return
         for e in unit.entities:
             self.passages[str(e["entity_id"])] = entity_passages(unit, e, ENTITY_EVIDENCE_CHARS)
-        self.groups = _chunks(self.ids, -(-n // MAX_RETRIEVAL_GROUPS))
+        n_groups = min(n, RETRIEVAL_GROUPS_SMALL) if n <= 2 * RETRIEVAL_GROUPS_SMALL else MAX_RETRIEVAL_GROUPS
+        self.groups = _chunks(self.ids, -(-n // n_groups))
         if len(self.groups[0]) == 1:
             self.group_prompts = [self._entity_prompt(g[0]) for g in self.groups]
             if n <= GROUP_MAX_FULL:  # one compact unit-wide pass for cross-sectional context
@@ -103,7 +111,7 @@ class Planner:
         else:
             self.group_prompts = []
             for g in self.groups:
-                share = max(2500, QUICK_EVIDENCE_CHARS // len(g))
+                share = max(2500, min(ENTITY_EVIDENCE_CHARS, GROUP_EVIDENCE_CHARS // len(g)))
                 excerpts = {eid: _trim(self.passages[eid], share) for eid in g}
                 self.group_prompts.append(prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, excerpts), g))
         spare = 24 - REASONS_RESERVE - 2 - (1 if self.unit_prompt else 0)
@@ -121,8 +129,12 @@ class Planner:
 
     def _job(self, kind: str, key: str, ids: list[str], prompt: str, weight: float = 1.0) -> Job:
         k = self.attempts[key]
-        tokens = 1500 if len(ids) == 1 else min(4000, 700 + 330 * len(ids))
-        return Job(kind, key, tuple(ids), prompt, 0.0 if k == 0 else 0.7,
+        if THINKING:
+            tokens, temperature = 4000, 0.6
+        else:
+            tokens = 1500 if len(ids) == 1 else min(4000, 900 + 400 * len(ids))
+            temperature = 0.0 if k == 0 else 0.7
+        return Job(kind, key, tuple(ids), prompt, temperature,
                    self.seed + 1000 * (_stable(key) % 997) + k, tokens, weight)
 
     def disagreement(self, eid: str) -> float:
@@ -199,6 +211,8 @@ class Planner:
         got = parse_predictions(raw, target_type=self.unit.target_type, labels=self.unit.labels,
                                 entity_ids=set(job.ids), weight=job.weight, source=job.kind)
         got = [s for s in got if s.lo is not None and s.hi is not None]
+        if self.growth:
+            got = [ground_growth(s, self.rows[s.entity_id]) for s in got]
         if not got:
             self.trace.failures.append(f"{job.key}: unusable reply")
             return
@@ -244,7 +258,7 @@ def _trim(passages, budget: int):
 
 def _call(chat: Chat, job: Job, timeout: float) -> str:
     return chat.complete(prompts.SYSTEM, job.prompt, temperature=job.temperature, seed=job.seed,
-                         max_tokens=job.max_tokens, timeout=timeout)
+                         max_tokens=job.max_tokens, timeout=timeout, thinking=THINKING)
 
 
 def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Schedule,
@@ -299,12 +313,18 @@ def reasons(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sche
     declared = []
     for row in rows:
         view = {"entity_id": row["entity_id"]}
-        for key in ("label", "point_forecast"):
-            if key in row:
-                view[key] = row[key]
-        view["interval"] = [row["interval"]["lo"], row["interval"]["hi"]]
+        if "label" in row:
+            view["label"] = row["label"]
+        if "point_forecast" in row:
+            view["point_forecast"] = float(f"{row['point_forecast']:.3g}")
+        view["interval"] = [float(f"{row['interval']['lo']:.3g}"), float(f"{row['interval']['hi']:.3g}")]
         declared.append(view)
-    text = prompts.reasons_prompt(unit, declared, [(k, c["claim"]) for k, c in candidates])
+    listed = []
+    for key, c in candidates:
+        doc = unit.docs.get(c["doc_id"])
+        applies = "all entities" if doc is None or doc.entity_ids is None else ", ".join(sorted(doc.entity_ids))
+        listed.append((key, c["claim"], c["doc_id"], applies))
+    text = prompts.reasons_prompt(unit, declared, listed)
     note = "not attempted"
     for attempt in range(2):
         now = time.monotonic() - start

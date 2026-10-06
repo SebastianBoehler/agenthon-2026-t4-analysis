@@ -29,7 +29,7 @@ class BudgetExhausted(RuntimeError):
 
 class Chat(Protocol):
     def complete(self, system: str, user: str, *, temperature: float, seed: int,
-                 max_tokens: int, timeout: float) -> str: ...
+                 max_tokens: int, timeout: float, thinking: bool = False) -> str: ...
 
 
 @dataclass
@@ -97,7 +97,8 @@ class HouseClient:
         self.config = config
         self.budget = budget
 
-    def payload(self, system: str, user: str, *, temperature: float, seed: int, max_tokens: int) -> dict:
+    def payload(self, system: str, user: str, *, temperature: float, seed: int, max_tokens: int,
+                thinking: bool = False) -> dict:
         return {
             "model": self.config.model,
             "messages": [
@@ -107,12 +108,13 @@ class HouseClient:
             "temperature": temperature,
             "seed": seed,
             "max_tokens": min(int(max_tokens), MAX_OUTPUT_TOKENS),
-            "chat_template_kwargs": {"enable_thinking": False},
+            "chat_template_kwargs": {"enable_thinking": thinking},
         }
 
     def complete(self, system: str, user: str, *, temperature: float, seed: int,
-                 max_tokens: int, timeout: float) -> str:
-        payload = self.payload(system, user, temperature=temperature, seed=seed, max_tokens=max_tokens)
+                 max_tokens: int, timeout: float, thinking: bool = False) -> str:
+        payload = self.payload(system, user, temperature=temperature, seed=seed, max_tokens=max_tokens,
+                               thinking=thinking)
         headers = {"Content-Type": "application/json"}
         if self.config.token:
             headers["Authorization"] = f"Bearer {self.config.token}"

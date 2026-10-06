@@ -28,6 +28,8 @@ _ANCHORS = [
     (re.compile(r"net income (?:applicable|attributable|was|of|for|increased|decreased)|net (?:loss|income) of \$", re.I), 1.0),
     (re.compile(r"\b(?:guidance|outlook|we expect|we anticipate|expects? (?:to|that)|full[- ]year|second half|next quarter)\b", re.I), 1.5),
     (re.compile(r"going concern|substantial doubt|event of default|forbearance|waiver|chapter 11|bankruptcy|restructuring support|distressed", re.I), 2.0),
+    (re.compile(r"exchange offer|debt exchange|exchanged? (?:for|into) (?:new|shares|equity)|tender offer|recapitali[sz]ation|"
+                r"(?:principal|debt) reduction|liquidity runway|refinanc", re.I), 1.5),
     (re.compile(r"liquidity and capital resources|covenant|maturit(?:y|ies) of (?:our )?debt|borrowing capacity|cash and cash equivalents of", re.I), 1.0),
     (re.compile(r"results of operations|executive summary|financial highlights|overview of (?:the )?(?:quarter|results)", re.I), 1.0),
     (re.compile(r"net interest income|provision for credit losses|net charge-offs|investment banking fees|trading revenue", re.I), 1.0),

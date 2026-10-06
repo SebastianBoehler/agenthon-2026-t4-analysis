@@ -94,6 +94,22 @@ def _round(x: float) -> float:
     return float(f"{x:.6g}")
 
 
+def binary_outcome_band(p: float, level: float = 0.90) -> tuple[float, float]:
+    """Probability-anchored band heuristic under an assumed binary numeric outcome.
+
+    Interior probabilities use [0, 1], the raw interval-score optimum for Bernoulli outcomes.
+    Extreme bands retain the forecast probability; this containment choice is not an official
+    requirement or the unconstrained optimum. Official predictive gain remains unmeasured.
+    """
+    p = min(1.0, max(0.0, p))
+    edge = (1.0 - level) / 2.0
+    if p < edge:
+        return 0.0, p
+    if p > 1.0 - edge:
+        return p, 1.0
+    return 0.0, 1.0
+
+
 def combine(samples: list[Sample], target_type: str, unit_interval: bool = False) -> Forecast | None:
     usable = [s for s in samples if s.lo is not None and s.hi is not None]
     if not usable:
@@ -118,6 +134,8 @@ def combine(samples: list[Sample], target_type: str, unit_interval: bool = False
         lo, hi = min(lo, point), max(hi, point)
     if unit_interval:
         lo, hi = max(0.0, lo), min(1.0, hi)
+        if point is not None:
+            lo, hi = binary_outcome_band(point)
     if hi <= lo:
         pad = max(abs(lo) * 1e-3, 1e-6)
         lo, hi = lo - pad, hi + pad

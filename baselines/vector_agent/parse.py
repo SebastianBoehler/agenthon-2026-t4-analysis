@@ -29,6 +29,8 @@ class Sample:
     baseline: float | None
     analysis: str
     sigma: float | None = None
+    level: float | None = None
+    base: float | None = None
     quotes: list[tuple[str, str]] = field(default_factory=list)  # (doc_id, quote)
     weight: float = 1.0
     source: str = ""
@@ -120,14 +122,16 @@ def to_sample(item: dict, *, target_type: str, labels: list[str], entity_ids: se
         lo, hi = hi, lo
     sigma = number(item.get("sigma"))
     if sigma is not None and sigma > 0 and point is not None:
-        # The model's own sigma: never let its stated band be narrower than +/-1.645 sigma.
-        half = 1.6448536269514722 * sigma
-        lo = point - half if lo is None else min(lo, point - half)
-        hi = point + half if hi is None else max(hi, point + half)
+        # The model's own sigma: its band is at least +/-1.645 sigma, and an edge beyond 5 sigma
+        # (a dropped digit, a units slip) is replaced by the sigma-implied edge.
+        half, far = 1.6448536269514722 * sigma, 5.0 * sigma
+        lo = point - half if lo is None or lo < point - far else min(lo, point - half)
+        hi = point + half if hi is None or hi > point + far else max(hi, point + half)
     return Sample(
         entity_id=eid, point=point, lo=lo, hi=hi, label=label, probability=prob,
         baseline=number(item.get("baseline")), analysis=str(item.get("analysis") or "")[:1200],
         quotes=_quotes(item), weight=weight, source=source, sigma=sigma,
+        level=number(item.get("level_forecast")), base=number(item.get("base_value")),
     )
 
 

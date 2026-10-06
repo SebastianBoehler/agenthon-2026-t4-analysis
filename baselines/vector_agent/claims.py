@@ -114,20 +114,35 @@ def entity_claims(unit: Unit, entity: dict, samples: list[Sample], hint: str,
     return claims
 
 
+REASON_CANDIDATES = 30
+
+
 def reason_candidates(unit: Unit, claims_by_entity: dict[str, list[dict]]) -> list[tuple[str, dict]]:
+    """Premise candidates: each entity's claims, then the passages of the smaller documents that
+    best match the drivers the task names (cross-entity premises for broad reasons)."""
     out: list[tuple[str, dict]] = []
     seen: set[tuple[str, int, int]] = set()
+
+    def add(c: dict) -> None:
+        key = (c["doc_id"], c["span_start"], c["span_end"])
+        if key in seen or any(k[0] == key[0] and k[1] < key[2] and key[1] < k[2] for k in seen):
+            return
+        seen.add(key)
+        out.append((f"R{len(out) + 1}", c))
+
     for eid in unit.entity_ids:
         for c in claims_by_entity.get(eid, []):
-            if c["doc_id"] == "task":
-                continue
-            key = (c["doc_id"], c["span_start"], c["span_end"])
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append((f"R{len(out) + 1}", c))
-            if len(out) >= 24:
+            if c["doc_id"] != "task" and len(out) < REASON_CANDIDATES - 6:
+                add(c)
+    query = task_query(unit, None)
+    for doc in sorted(unit.docs.values(), key=lambda d: (d.entity_ids is not None, d.doc_id)):
+        if len(doc.text) > 3 * SMALL_DOC_CHARS:
+            continue
+        for st, en in best_segments(doc, {}, query, "", 2):
+            if len(out) >= REASON_CANDIDATES:
                 return out
+            if _substantive(doc.text[st:en]):
+                add(_claim(doc.doc_id, doc.text, st, en))
     return out
 
 

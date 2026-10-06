@@ -39,7 +39,7 @@ class LoggedOpenRouter(HouseClient):
 
     def payload(self, system, user, **kw):
         body = super().payload(system, user, **kw)
-        body["reasoning"] = {"enabled": False}  # House runs with thinking disabled
+        body["reasoning"] = {"enabled": bool(kw.get("thinking"))}  # mirrors the House thinking switch
         return body
 
     def complete(self, system, user, **kw):
