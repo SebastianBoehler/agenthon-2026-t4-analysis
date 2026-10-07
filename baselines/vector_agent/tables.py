@@ -108,12 +108,14 @@ def summarize(text: str, horizon_days: int | None = None) -> str:
         dated = [j for j in range(1, min(len(header), _MAX_COLUMNS + 1)) if _DATEISH.search(header[j])
                  and sum(_num(r[j]) is not None for r in rows) >= 2]
         if len(dated) >= 3:
-            revisions, per_release = [], []
+            revisions, per_release, routine = [], [], []
             for a, b in zip(dated, dated[1:]):
                 diffs = [_num(r[b]) - _num(r[a]) for r in rows
                          if _num(r[a]) is not None and _num(r[b]) is not None]
                 moved = [d for d in diffs if d != 0]
                 revisions += moved
+                if not (len(diffs) >= 4 and len(moved) == len(diffs)):
+                    routine += moved  # a release that revises every value is an annual/benchmark update
                 if diffs:
                     mean_abs = sum(abs(d) for d in moved) / len(moved) if moved else 0.0
                     per_release.append(f"{header[a]} -> {header[b]}: {len(moved)} of {len(diffs)} values revised"
@@ -126,5 +128,9 @@ def summarize(text: str, horizon_days: int | None = None) -> str:
                              f"up={ups}, down={len(revisions) - ups}, median abs={_fmt(med)}, "
                              f"mean abs={_fmt(sum(abs(x) for x in revisions) / len(revisions))}; by release "
                              "(a release that revises every month at once is usually an annual or benchmark "
-                             "update): " + "; ".join(per_release))
+                             "update): " + "; ".join(per_release)
+                             + (f"; routine releases only (excluding releases that revised every value): "
+                                f"up={sum(1 for x in routine if x > 0)}, down={sum(1 for x in routine if x < 0)}, "
+                                f"median abs={_fmt(_median([abs(x) for x in routine]))}"
+                                if routine and len(routine) < len(revisions) else ""))
     return "\n".join(lines)
