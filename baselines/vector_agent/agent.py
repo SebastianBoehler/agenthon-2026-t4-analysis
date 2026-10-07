@@ -30,6 +30,8 @@ QUICK_EVIDENCE_CHARS = 48_000
 GROUP_EVIDENCE_CHARS = 80_000
 THINKING = False  # Nemotron 3 Super reasons before answering (the House default); costs output tokens
 UNIT_SAMPLES = 3 if THINKING else 9
+UNIT_SAMPLES_MAX = 15  # with time and budget to spare, more samples steady the medians
+EXTRA_ROUNDS = 3  # likewise for retrieval groups
 MAX_ENTITY_SAMPLES = 3 if THINKING else 5
 RETRIEVAL_GROUPS_SMALL = 5  # rosters of up to 10 rows: at most 5 retrieval groups, so each gets ~5 samples
 GROUP_MAX_FULL = 4 if THINKING else 12
@@ -49,6 +51,7 @@ class Schedule:
     reasons_stop: float = 480.0
     request_timeout: float = 240.0
     workers: int = 4
+    extras_stop: float = 200.0  # extra samples (variance reduction) are launched only before this
 
 
 @dataclass
@@ -184,7 +187,9 @@ class Planner:
                     return self._job("entity", eid, [eid], self._entity_prompt(eid))
         return None
 
-    def next_job(self, budget_left: int) -> Job | None:
+    def next_job(self, budget_left: int, extras: bool = False) -> Job | None:
+        """``extras``: early enough in the schedule to spend spare budget on more samples."""
+        extras = extras and budget_left > REASONS_RESERVE + 1
         if (self.cohort_prompt and self.attempts["cohort"] < cohort.COHORT_CALLS
                 and self.inflight["cohort"] == 0 and all(self.samples[eid] for eid in self.ids)):
             k = self.attempts["cohort"]
@@ -198,12 +203,22 @@ class Planner:
                 floor = min(len(self.samples[eid]) for eid in g)
                 if floor + self.inflight[key] < self.target and self.attempts[key] < self.target + 4:
                     return self._job("unit", key, g, self.group_prompts[idx])
-            return self._rescue()
+            rescue = self._rescue()
+            if rescue or not extras:
+                return rescue
+            for idx in order:
+                key, g = f"g{idx}", self.groups[idx]
+                floor = min(len(self.samples[eid]) for eid in g)
+                if floor + self.inflight[key] < UNIT_SAMPLES_MAX and self.attempts[key] < UNIT_SAMPLES_MAX + 4:
+                    return self._job("unit", key, g, self.group_prompts[idx])
+            return None
         # Retrieval mode: rounds over the groups (plus the unit-wide pass), then rescue, then depth.
-        for depth in range(1, self.target + 1):
+        rounds = self.target + (EXTRA_ROUNDS if extras and all(self.done[f"g{i}"] >= self.target
+                                                               for i in range(len(self.groups))) else 0)
+        for depth in range(1, rounds + 1):
             for idx, g in enumerate(self.groups):
                 key = f"g{idx}"
-                if self.done[key] + self.inflight[key] >= depth or self.attempts[key] >= self.target + 2:
+                if self.done[key] + self.inflight[key] >= depth or self.attempts[key] >= rounds + 2:
                     continue
                 return self._job("entity" if len(g) == 1 else "group", key, g, self.group_prompts[idx])
             if depth == 1 and self.unit_prompt and self.inflight["unit"] == 0 and self.done["unit"] < 1 \
@@ -339,7 +354,7 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
             workers = 2 if getattr(chat, "rate_limited", 0) else schedule.workers  # back off once throttled
             while (len(pending) < workers and now < schedule.launch_stop
                    and budget.remaining - len(pending) > REASONS_RESERVE):
-                job = plan.next_job(budget.remaining - len(pending))
+                job = plan.next_job(budget.remaining - len(pending), extras=now < schedule.extras_stop)
                 if job is None:
                     break
                 plan.mark_launched(job)
