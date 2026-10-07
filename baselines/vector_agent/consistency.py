@@ -41,8 +41,8 @@ def ground_growth(sample: Sample, row: dict) -> Sample:
         if len(numbers) != 1:
             return sample  # no unambiguous table base: leave the sample as the model gave it
         base = numbers[0]  # the row's only number is the base the growth is measured against
-    if base <= 0:
-        return sample
+    if base <= 0 or not 0.2 <= level / base <= 5.0:
+        return sample  # level and base are not the same quantity: leave the model's growth alone
     growth = (level / base - 1.0) * 100.0
     shift = growth - sample.point
     if abs(shift) < 1e-9:

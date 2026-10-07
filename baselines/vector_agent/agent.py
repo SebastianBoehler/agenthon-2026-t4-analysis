@@ -7,6 +7,7 @@ wall-clock schedule; every forecast in the answer comes from model samples.
 """
 from __future__ import annotations
 
+import json
 import time
 import urllib.error
 from collections import Counter
@@ -34,6 +35,9 @@ RETRIEVAL_GROUPS_SMALL = 5  # rosters of up to 10 rows: at most 5 retrieval grou
 GROUP_MAX_FULL = 4 if THINKING else 12
 MAX_RETRIEVAL_GROUPS = 10
 REASONS_RESERVE = 1
+ANSWER_BYTES_CAP = 2900  # the reasoning grader reads at most 3000 bytes of per-entity answers
+MAX_FULL_GROUPS = 16
+MAX_PROMPT_CHARS = 120_000  # cohort and unit-wide prompts are cut to this before sending
 
 
 @dataclass
@@ -99,13 +103,13 @@ class Planner:
         self.cohort_prompt: str | None = None
         n = max(1, len(self.ids))
         if self.full:
-            self.groups = _chunks(self.ids, GROUP_MAX_FULL)
+            self.groups = _chunks(self.ids, max(GROUP_MAX_FULL, -(-n // MAX_FULL_GROUPS)))
             docs = prompts.unit_docs_full(unit)
             focus = len(self.groups) > 1
             self.group_prompts = [prompts.unit_prompt(unit, docs, g if focus else None) for g in self.groups]
             self.target = UNIT_SAMPLES
             if self.event:
-                self.cohort_prompt = cohort.question(_head(prompts.unit_prompt(unit, docs)), self.event[0], n)
+                self.cohort_prompt = _fit(cohort.question(_head(prompts.unit_prompt(unit, docs)), self.event[0], n))
             return
         for e in unit.entities:
             self.passages[str(e["entity_id"])] = entity_passages(unit, e, ENTITY_EVIDENCE_CHARS)
@@ -116,7 +120,7 @@ class Planner:
             if n <= GROUP_MAX_FULL:  # one compact unit-wide pass for cross-sectional context
                 share = max(2500, QUICK_EVIDENCE_CHARS // n)
                 quick = {eid: _trim(ps, share) for eid, ps in self.passages.items()}
-                self.unit_prompt = prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, quick))
+                self.unit_prompt = _fit(prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, quick)))
         else:
             self.group_prompts = []
             for g in self.groups:
@@ -124,10 +128,10 @@ class Planner:
                 excerpts = {eid: _trim(self.passages[eid], share) for eid in g}
                 self.group_prompts.append(prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, excerpts), g))
         if self.event:
-            share = max(2500, QUICK_EVIDENCE_CHARS // n)
+            share = max(1200, QUICK_EVIDENCE_CHARS // n)
             compact = {eid: _trim(ps, share) for eid, ps in self.passages.items()}
-            self.cohort_prompt = cohort.question(
-                _head(prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, compact))), self.event[0], n)
+            self.cohort_prompt = _fit(cohort.question(
+                _head(prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, compact))), self.event[0], n))
         spare = (24 - REASONS_RESERVE - 2 - (1 if self.unit_prompt else 0)
                  - (cohort.COHORT_CALLS if self.event else 0))
         self.target = max(1, min(MAX_ENTITY_SAMPLES, spare // len(self.groups)))
@@ -182,7 +186,7 @@ class Planner:
 
     def next_job(self, budget_left: int) -> Job | None:
         if (self.cohort_prompt and self.attempts["cohort"] < cohort.COHORT_CALLS
-                and self.inflight["cohort"] == 0 and sum(self.done.values()) >= 1):
+                and self.inflight["cohort"] == 0 and all(self.samples[eid] for eid in self.ids)):
             k = self.attempts["cohort"]
             return Job("cohort", "cohort", tuple(self.ids), self.cohort_prompt, 0.7,
                        self.seed + 7000 + k, 900, 1.0)
@@ -238,11 +242,15 @@ class Planner:
                 self.cohort_rankings.append(ranking)
             self.trace.succeeded["cohort"] += 1
             return
-        got = parse_predictions(raw, target_type=self.unit.target_type, labels=self.unit.labels,
-                                entity_ids=set(job.ids), weight=job.weight, source=job.kind)
-        got = [s for s in got if s.lo is not None and s.hi is not None]
-        if self.growth:
-            got = [ground_growth(s, self.rows[s.entity_id]) for s in got]
+        try:
+            got = parse_predictions(raw, target_type=self.unit.target_type, labels=self.unit.labels,
+                                    entity_ids=set(job.ids), weight=job.weight, source=job.kind)
+            got = [s for s in got if s.lo is not None and s.hi is not None]
+            if self.growth:
+                got = [ground_growth(s, self.rows[s.entity_id]) for s in got]
+        except Exception as exc:  # noqa: BLE001 - a malformed reply is a failed call, never a crash
+            self.trace.failures.append(f"{job.key}: unparsable reply ({type(exc).__name__})")
+            return
         if not got:
             self.trace.failures.append(f"{job.key}: unusable reply")
             return
@@ -276,6 +284,13 @@ def _probability_target(unit: Unit, samples: dict[str, list[Sample]]) -> bool:
     return bool(points) and all(0.0 <= p <= 1.0 for p in points)
 
 
+def _fit(prompt: str) -> str:
+    """Cut a prompt's evidence so the whole prompt stays within MAX_PROMPT_CHARS."""
+    if len(prompt) <= MAX_PROMPT_CHARS:
+        return prompt
+    return prompts.shrink_evidence(prompt, max(0.05, MAX_PROMPT_CHARS / len(prompt) * 0.9))
+
+
 def _head(prompt: str) -> str:
     """The task, table and evidence of a forecasting prompt, without its method and output rules."""
     cut = prompt.find("How to forecast:")
@@ -283,10 +298,13 @@ def _head(prompt: str) -> str:
 
 
 def _trim(passages, budget: int):
+    """Excerpts for a prompt within ``budget`` characters; an oversized first one is cut to fit."""
     out, used = [], 0
     for p in passages:
-        if used + len(p.text) > budget and out:
-            continue
+        if used + len(p.text) > budget:
+            if out:
+                continue
+            p = Passage(p.doc_id, p.start, p.start + budget, p.text[:budget])
         out.append(p)
         used += len(p.text)
     return out
@@ -320,8 +338,8 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
             now = time.monotonic() - start
             workers = 2 if getattr(chat, "rate_limited", 0) else schedule.workers  # back off once throttled
             while (len(pending) < workers and now < schedule.launch_stop
-                   and budget.remaining > REASONS_RESERVE):
-                job = plan.next_job(budget.remaining)
+                   and budget.remaining - len(pending) > REASONS_RESERVE):
+                job = plan.next_job(budget.remaining - len(pending))
                 if job is None:
                     break
                 plan.mark_launched(job)
@@ -336,11 +354,12 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
             for fut in done:
                 job = pending.pop(fut)
                 try:
-                    plan.absorb(job, fut.result(), None)
+                    raw, err = fut.result(), None
                 except BudgetExhausted as exc:
-                    plan.absorb(job, None, str(exc))
+                    raw, err = None, str(exc)
                 except Exception as exc:  # noqa: BLE001 - any call failure is recorded, not fatal
-                    plan.absorb(job, None, f"{type(exc).__name__}: {exc}"[:200])
+                    raw, err = None, f"{type(exc).__name__}: {exc}"[:200]
+                plan.absorb(job, raw, err)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
     results = {}
@@ -361,6 +380,9 @@ def reasons(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sche
     now = time.monotonic() - start
     if now > schedule.reasons_latest or budget.remaining < 1:
         return [], "skipped (time or budget)"
+    view = [{k: r[k] for k in ("entity_id", "label", "point_forecast", "interval") if k in r} for r in rows]
+    if len(json.dumps(view, ensure_ascii=False, separators=(",", ":")).encode()) > ANSWER_BYTES_CAP:
+        return [], "skipped (answer over the reasoning grader's cap)"
     candidates = reason_candidates(unit, claims_by_entity)
     if not candidates:
         return [], "skipped (no candidate premises)"

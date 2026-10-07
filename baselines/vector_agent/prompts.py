@@ -21,7 +21,8 @@ def _target_block(unit: Unit) -> str:
     lines = [f"Target: {t.get('name', '')} (type: {unit.target_type})."]
     if unit.labels:
         lines.append("Allowed labels: " + ", ".join(unit.labels) + ".")
-        for lab, text in (t.get("label_assertions") or {}).items():
+        assertions = t.get("label_assertions")
+        for lab, text in (assertions.items() if isinstance(assertions, dict) else []):
             lines.append(f'- "{lab}": {text}')
     lines.append(
         f"Cutoff date: {unit.task.get('cutoff_date', '')}. "
@@ -268,14 +269,14 @@ def reasons_prompt(unit: Unit, answers: list[dict], candidates: list[tuple[str, 
 
 
 _EVIDENCE_START = ("EVIDENCE DOCUMENTS", "EVIDENCE EXCERPTS")
-_EVIDENCE_END = "How to forecast:"
+_EVIDENCE_END = ("How to forecast:", "COHORT QUESTION")
 
 
 def shrink_evidence(prompt: str, factor: float) -> str:
     """Keep the task, table and instructions; keep only the first ``factor`` of the evidence,
     cut at a document boundary."""
     start = min((i for i in (prompt.find(m) for m in _EVIDENCE_START) if i >= 0), default=-1)
-    end = prompt.find(_EVIDENCE_END)
+    end = min((i for i in (prompt.find(m) for m in _EVIDENCE_END) if i >= 0), default=-1)
     if start < 0 or end <= start:
         return prompt
     body = prompt[start:end]

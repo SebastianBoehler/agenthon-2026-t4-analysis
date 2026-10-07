@@ -82,34 +82,71 @@ def _norm_label(text: str) -> str:
     return re.sub(r"[\s\-]+", "_", text)
 
 
+def _squash(text: str) -> str:
+    return re.sub(r"[^0-9a-z]+", "", unicodedata.normalize("NFKC", text).lower())
+
+
 def match_label(value, labels: list[str]) -> str | None:
-    """Map a model label onto the task vocabulary (case, spacing and hyphen insensitive)."""
+    """Map a model label onto the task vocabulary: case, spacing and punctuation insensitive, and
+    the label stated before an annotation ("Up (revised higher)"). Never a guess between labels."""
     if not isinstance(value, str) or not labels:
         return None
     norm = _norm_label(value)
     exact = {_norm_label(lab): lab for lab in labels}
     if norm in exact:
         return exact[norm]
+    squashed = {_squash(lab): lab for lab in labels}
+    if len(squashed) != len(labels):
+        return None
+    for candidate in (value, re.split(r"[(\[:;,!?]|\s[-–—]\s", value)[0]):
+        key = _squash(candidate)
+        if key in squashed:
+            return squashed[key]
     return None
 
 
 def _quotes(item: dict) -> list[tuple[str, str]]:
     out = []
-    for ev in item.get("evidence") or []:
+    evidence = item.get("evidence")
+    for ev in evidence if isinstance(evidence, list) else []:
         if isinstance(ev, dict) and isinstance(ev.get("quote"), str):
             out.append((str(ev.get("doc_id") or ""), ev["quote"]))
     return out
 
 
+def _id_resolver(entity_ids: set[str]):
+    """Exact ids, then case/punctuation-insensitive ids when that mapping is unambiguous."""
+    squashed: dict[str, list[str]] = {}
+    for eid in entity_ids:
+        squashed.setdefault(_squash(eid), []).append(eid)
+
+    def resolve(value) -> str | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        text = str(value).strip() if not isinstance(value, float) or not value.is_integer() else str(int(value))
+        if text in entity_ids:
+            return text
+        hits = squashed.get(_squash(text), [])
+        return hits[0] if len(hits) == 1 else None
+
+    return resolve
+
+
 def to_sample(item: dict, *, target_type: str, labels: list[str], entity_ids: set[str],
-              weight: float, source: str) -> Sample | None:
-    eid = item.get("entity_id")
-    if not isinstance(eid, str) or eid not in entity_ids:
+              weight: float, source: str, resolve=None, only: str | None = None) -> Sample | None:
+    """``only``: the one entity a single-entity prompt asked for (its echoed id is not required)."""
+    eid = only or (resolve or _id_resolver(entity_ids))(item.get("entity_id"))
+    if eid is None or eid not in entity_ids:
         return None
     point = number(item.get("point_forecast"))
-    interval = item.get("interval") if isinstance(item.get("interval"), dict) else {}
+    interval = item.get("interval")
+    if isinstance(interval, (list, tuple)) and len(interval) == 2:
+        interval = {"lo": interval[0], "hi": interval[1]}
+    interval = interval if isinstance(interval, dict) else {}
     lo = number(item.get("lo", interval.get("lo")))
     hi = number(item.get("hi", interval.get("hi")))
+    if point is None and lo is not None and hi is not None and target_type in ("regression", "ranking"):
+        point = (lo + hi) / 2  # the model's own band, centred
     label = match_label(item.get("label"), labels) if labels else None
     prob = number(item.get("probability"))
     if prob is not None and not 0.0 <= prob <= 1.0:
@@ -168,17 +205,25 @@ def _row_objects(raw: str) -> list[dict]:
 def parse_predictions(raw: str, *, target_type: str, labels: list[str], entity_ids: set[str],
                       weight: float, source: str) -> list[Sample]:
     obj = extract_json(raw, ("predictions",))
-    if obj is not None and isinstance(obj.get("predictions"), list):
-        items = obj["predictions"]
+    preds = obj.get("predictions") if obj is not None else None
+    if isinstance(preds, list):
+        items = preds
+    elif isinstance(preds, dict):  # keyed by entity id
+        items = [dict(v, entity_id=v.get("entity_id", k)) for k, v in preds.items() if isinstance(v, dict)]
     else:
         items = _row_objects(raw)
+        if not items and len(entity_ids) == 1:
+            single = extract_json(raw, ("point_forecast", "label", "lo", "interval"))
+            items = [single] if single is not None else []
+    resolve = _id_resolver(entity_ids)
+    only = next(iter(entity_ids)) if len(entity_ids) == 1 and len(items) == 1 else None
     out: list[Sample] = []
     seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
             continue
         s = to_sample(item, target_type=target_type, labels=labels, entity_ids=entity_ids,
-                      weight=weight, source=source)
+                      weight=weight, source=source, resolve=resolve, only=only)
         if s is not None and s.entity_id not in seen:
             seen.add(s.entity_id)
             out.append(s)

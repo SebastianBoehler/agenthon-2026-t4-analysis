@@ -344,3 +344,38 @@ def test_rate_limit_storm_is_bounded(monkeypatch):
         client.complete("s", "u", temperature=0, seed=1, max_tokens=10, timeout=100)
     assert len(calls) == HouseClient.retries_429 + 1 and budget.used == len(calls)
     assert client.rate_limited == len(calls)
+
+
+def test_reply_shapes_that_used_to_lose_an_entity():
+    lab = ["inline", "beat", "miss"]
+    assert match_label("in-line", lab) == "inline" and match_label("Beat (by 7%)", lab) == "beat"
+    assert match_label("up.", ["up", "down"]) == "up" and match_label("maybe", ["up", "down"]) is None
+    raw = json.dumps({"predictions": [{"entity_id": 7203, "point_forecast": 1, "lo": 0, "hi": 2},
+                                      {"entity_id": "brk-b", "point_forecast": None, "interval": [1, 3]}]})
+    got = parse_predictions(raw, target_type="regression", labels=[], entity_ids={"7203", "BRK.B"},
+                            weight=1, source="t")
+    assert {s.entity_id for s in got} == {"7203", "BRK.B"}
+    assert next(s for s in got if s.entity_id == "BRK.B").point == 2
+    single = json.dumps({"entity_id": "A ", "point_forecast": 1, "lo": 0, "hi": 2})
+    assert parse_predictions(single, target_type="regression", labels=[], entity_ids={"a"},
+                             weight=1, source="t")[0].entity_id == "a"
+    keyed = json.dumps({"predictions": {"X": {"point_forecast": 1, "lo": 0, "hi": 2, "evidence": 3}}})
+    assert parse_predictions(keyed, target_type="regression", labels=[], entity_ids={"X"},
+                             weight=1, source="t")[0].entity_id == "X"
+
+
+def test_hardening_from_the_adversarial_review(tmp_path):
+    from baselines.vector_agent.cli import _seed
+    from baselines.vector_agent.consistency import ground_growth
+    from baselines.vector_agent.prompts import shrink_evidence
+    assert 0 <= _seed("deadbeef-uuid") < 2**31 and _seed("") == 20261006 and _seed("12") == 12
+    s = _sample("A", 5.0, 1.0, 9.0)
+    s.level, s.base = 1.3, None
+    assert ground_growth(s, {"entity_id": "A", "trailing_growth_pct": 0.2}).point == 5.0
+    cohort_like = "TASK\n\nEVIDENCE DOCUMENTS (x)\n\n=== D1 | h ===\n" + "a" * 5000 + "\n\nCOHORT QUESTION\nq"
+    assert len(shrink_evidence(cohort_like, 0.25)) < len(cohort_like)
+    unit = load_unit(ROOT / "units" / "t4-credit-event-2023" / "task.json", ROOT / "units" / "t4-credit-event-2023" / "corpus")
+    unit.task["target"] = dict(unit.task["target"], labels=None)
+    assert unit.labels == ["credit_event", "no_event"]
+    unit.task["interval_level"] = "90%"
+    assert unit.interval_level == 0.9

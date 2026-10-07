@@ -110,6 +110,9 @@ def entity_claims(unit: Unit, entity: dict, samples: list[Sample], hint: str,
     if not claims:
         text, ranges = task_table_text(unit.task)
         s, e = ranges[eid]
+        if e - s > MAX_CLAIM_CHARS:  # a slice of the row stays under the judge's token cap
+            cut = text.rfind(", ", s, s + MAX_CLAIM_CHARS)
+            e = cut if cut > s + 40 else s + MAX_CLAIM_CHARS
         claims.append({"doc_id": "task", "span_start": s, "span_end": e, "claim": text[s:e]})
     return claims
 

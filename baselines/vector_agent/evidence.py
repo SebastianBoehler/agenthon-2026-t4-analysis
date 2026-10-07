@@ -133,7 +133,8 @@ def task_query(unit: Unit, entity: dict | None) -> Counter:
         q[t] += 1.0
     for t in tokens(str(target.get("name", "")).replace("_", " ")):
         q[t] += 1.5
-    for text in (target.get("label_assertions") or {}).values():
+    assertions = target.get("label_assertions")
+    for text in (assertions.values() if isinstance(assertions, dict) else []):
         for t in tokens(str(text)):
             q[t] += 0.5
     for t in tokens(_BOOST):
@@ -175,10 +176,18 @@ def entity_passages(unit: Unit, entity: dict, budget_chars: int) -> list[Passage
         chosen.append(Passage(d.doc_id, 0, len(d.text), d.text))
         used += len(d.text)
     if large and used < budget_chars:
-        pool, bm, static = _index(tuple(d.doc_id for d in large), large)
-        raw = bm.scores(task_query(unit, entity))
-        top = max(raw) if raw and max(raw) > 0 else 1.0
-        scores = [r / top + st for r, st in zip(raw, static)]
+        # Shared documents form one index for every entity; each entity's own documents another.
+        # Scores are normalised within each index, so neither group swamps the other.
+        query = task_query(unit, entity)
+        pool, scores = [], []
+        for group in ([d for d in large if d.entity_ids is None], [d for d in large if d.entity_ids is not None]):
+            if not group:
+                continue
+            g_pool, bm, static = _index(tuple(sorted(d.doc_id for d in group)), group)
+            raw = bm.scores(query)
+            top = max(raw) if raw and max(raw) > 0 else 1.0
+            pool += g_pool
+            scores += [r / top + st for r, st in zip(raw, static)]
         order = sorted(range(len(pool)), key=lambda i: scores[i], reverse=True)
         picked: list[Passage] = []
         for i in order:

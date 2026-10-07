@@ -45,7 +45,11 @@ class Unit:
 
     @property
     def labels(self) -> list[str]:
-        return [str(x) for x in (self.target.get("labels") or [])]
+        labels = self.target.get("labels")
+        if isinstance(labels, list) and labels:
+            return [str(x) for x in labels]
+        assertions = self.target.get("label_assertions")
+        return [str(x) for x in assertions] if isinstance(assertions, dict) else []
 
     @property
     def entities(self) -> list[dict]:
@@ -57,7 +61,14 @@ class Unit:
 
     @property
     def interval_level(self) -> float:
-        return float(self.task.get("interval_level", 0.90))
+        """The schema fixes the level at 0.9; a stated 90 or "90%" means the same."""
+        raw = self.task.get("interval_level", 0.90)
+        try:
+            level = float(str(raw).strip().rstrip("%"))
+        except ValueError:
+            return 0.90
+        level = level / 100.0 if level > 1.0 else level
+        return level if 0.0 < level < 1.0 else 0.90
 
     def docs_for(self, entity_id: str) -> list[Doc]:
         return [d for d in self.docs.values() if d.admits(entity_id)]
@@ -140,7 +151,9 @@ def load_unit(task_path: Path, corpus_dir: Path) -> Unit:
         except (OSError, ValueError):
             unit.notes.append(f"unreadable {path.name}")
             continue
-        doc_id = str(doc.get("doc_id") or path.stem)
+        if not isinstance(doc, dict):
+            continue
+        doc_id = path.stem  # the manifest and the scorer key documents by file name
         doc_date = str(doc.get("doc_date") or "")
         if doc_id == TASK_DOC_ID or doc_id not in admission:
             continue  # only manifest-admitted documents are citable

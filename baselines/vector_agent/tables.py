@@ -21,9 +21,10 @@ def _num(cell: str) -> float | None:
     if not _CELL_NUM.match(cell):
         return None
     try:
-        return float(cell.replace(",", "").replace("$", "").replace("%", "").replace("−", "-"))
+        value = float(cell.replace(",", "").replace("$", "").replace("%", "").replace("−", "-"))
     except ValueError:
         return None
+    return value if math.isfinite(value) and abs(value) < 1e100 else None
 
 
 def _tables(text: str) -> list[list[list[str]]]:

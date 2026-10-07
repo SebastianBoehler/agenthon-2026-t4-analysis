@@ -44,7 +44,8 @@ def parse(raw: str, ids: set[str]) -> tuple[float | None, list[str]]:
     if obj is None:
         return None, []
     count = number(obj.get("expected_count"))
-    ranking = [e for e in obj.get("ranking") or [] if isinstance(e, str) and e in ids]
+    raw_ranking = obj.get("ranking")
+    ranking = [e for e in raw_ranking if isinstance(e, str) and e in ids] if isinstance(raw_ranking, list) else []
     return count, list(dict.fromkeys(ranking))
 
 
