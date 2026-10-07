@@ -91,10 +91,8 @@ value is the baseline. Otherwise use no change: zero for a change or growth targ
 stays at the table's base value), the latest observed print for a level or rate. Figures you \
 read or compute from the excerpts are signals, not the baseline. For a label about a direction \
 or an event, the baseline is the base rate: how often each label has occurred for comparable \
-cases in the history shown (a single latest observation is a noisy guide). When the evidence \
-shows no such history, do not anchor on population-wide base rates: the entities were selected \
-for this question, so judge each one's probability from its own specific evidence. Your \
-forecast is scored relative to that baseline: you gain only by being closer to the outcome.
+cases in the history shown (a single latest observation is a noisy guide). Your forecast is \
+scored relative to that baseline: you gain only by being closer to the outcome.
 2. Signals. Work through the drivers the task names and what the evidence says about each: \
 trends, mean reversion, announced or scheduled information, positioning, guidance, solvency. \
 Turn them into an expected direction and size over the forecast horizon.
