@@ -23,6 +23,7 @@ class Doc:
     title: str
     text: str
     entity_ids: frozenset[str] | None  # None = shared with every entity
+    citable: bool = True  # the scorer resolves offsets against a flat ``text`` field only
 
     def admits(self, entity_id: str) -> bool:
         return self.entity_ids is None or entity_id in self.entity_ids
@@ -154,5 +155,6 @@ def load_unit(task_path: Path, corpus_dir: Path) -> Unit:
             title=str(doc.get("title") or ""),
             text=text,
             entity_ids=admission[doc_id],
+            citable=isinstance(doc.get("text"), str),
         )
     return unit

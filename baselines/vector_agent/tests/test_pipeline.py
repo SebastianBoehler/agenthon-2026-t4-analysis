@@ -233,3 +233,114 @@ def test_probability_of_a_binary_event_gets_the_score_optimal_band():
     assert (fc.lo, fc.hi) == (0.0, 1.0)
     fc = combine([_sample("A", 0.01, 0.0, 0.03, "no_event")] * 3, "classification", unit_interval=True)
     assert fc.lo == 0.0 and fc.hi == pytest.approx(0.01)
+
+
+def test_driver_reasons_cite_support_and_drop_key_references():
+    from baselines.vector_agent.claims import build_reasons
+    unit = load_unit(ROOT / "units" / "t4-fomc-curve-20240918" / "task.json",
+                     ROOT / "units" / "t4-fomc-curve-20240918" / "corpus")
+    doc = unit.docs["RATES_SNAPSHOT_20240919"]
+    c1 = {"doc_id": doc.doc_id, "span_start": 0, "span_end": 60, "claim": doc.text[:60]}
+    c2 = {"doc_id": doc.doc_id, "span_start": 100, "span_end": 160, "claim": doc.text[100:160]}
+    reply = {"reasons": [{"driver": "d", "premise": "R1", "support": ["R2", "R9"], "mechanism": "m (R2)",
+                          "answer_implication": "i UST2Y", "entities": ["UST2Y"]}]}
+    got = build_reasons(unit, reply, [("R1", c1), ("R2", c2)])
+    assert len(got) == 1 and len(got[0]["citations"]) == 2 and got[0]["mechanism"] == "m"
+
+
+def test_rejected_prompt_is_retried_with_less_evidence():
+    import io
+    import urllib.error
+    from baselines.vector_agent.agent import Job, _call
+    from baselines.vector_agent.prompts import shrink_evidence
+
+    class Picky:
+        def __init__(self):
+            self.lengths = []
+
+        def complete(self, system, user, **kw):
+            self.lengths.append(len(user))
+            if len(user) > 20000:
+                raise urllib.error.HTTPError("u", 400, "context too long", {}, io.BytesIO(b""))
+            return "ok"
+
+    unit = load_unit(ROOT / "units" / "t4-cotpos-202411-us10" / "task.json",
+                     ROOT / "units" / "t4-cotpos-202411-us10" / "corpus")
+    from baselines.vector_agent import prompts
+    text = prompts.unit_prompt(unit, prompts.unit_docs_full(unit))
+    assert "How to forecast:" in shrink_evidence(text, 0.5) and len(shrink_evidence(text, 0.5)) < len(text)
+    chat = Picky()
+    assert _call(chat, Job("unit", "g0", tuple(unit.entity_ids), text, 0.0, 1, 1000, 1.0), 60) == "ok"
+    assert len(chat.lengths) >= 2 and chat.lengths[-1] < chat.lengths[0]
+
+
+def test_pure_label_reply_without_numbers_is_kept():
+    raw = json.dumps({"entity_id": "A", "label": "raise", "probability": 0.7, "point_forecast": None,
+                      "lo": None, "hi": None})
+    got = parse_predictions(raw, target_type="classification", labels=["raise", "cut", "hold"],
+                            entity_ids={"A"}, weight=1, source="t")
+    assert len(got) == 1 and (got[0].lo, got[0].hi, got[0].point) == (0.0, 1.0, 0.7)
+
+
+@pytest.mark.parametrize("unit_name", ["t4-macrorev-20240930-us6", "t4-credit-event-2023"])
+def test_classification_unit_completes_when_replies_carry_no_numbers(unit_name, tmp_path):
+    answer, _, budget, _ = _run(ROOT / "units" / unit_name, tmp_path, no_numbers=True)
+    rows = answer["entity_predictions"]
+    assert rows and all(r["interval"]["lo"] == 0.0 and r["interval"]["hi"] == 1.0 for r in rows)
+    assert budget.used <= 24
+
+
+def test_spans_only_documents_are_read_but_never_cited(tmp_path):
+    import shutil
+    src = ROOT / "units" / "t4-auction-btc-202411-us7"
+    dst = tmp_path / "u"
+    shutil.copytree(src, dst)
+    for path in (dst / "corpus").glob("TDIRECT_*.json"):
+        doc = json.loads(path.read_text())
+        doc["spans"] = [{"text": doc.pop("text")}]
+        path.write_text(json.dumps(doc))  # digests now differ; admission reads labels only
+    answer, _, _, _ = _run(dst, tmp_path)
+    for row in answer["entity_predictions"]:
+        assert all(c["doc_id"] == "task" for c in row["claims"])
+
+
+def test_event_labels_follow_the_cohort_count():
+    from baselines.vector_agent.aggregate import Forecast
+    from baselines.vector_agent.cohort import event_labels, relabel
+    assert event_labels(["credit_event", "no_event"]) == ("credit_event", "no_event")
+    assert event_labels(["up", "down"]) is None and event_labels(["beat", "miss", "inline"]) is None
+    probs = {"A": 0.85, "B": 0.35, "C": 0.30, "D": 0.05}
+    results = {e: Forecast(e, "no_event", p, 0.0, 1.0, "", 3) for e, p in probs.items()}
+    samples = {e: [_sample(e, p, 0.0, 1.0, "no_event")] for e, p in probs.items()}
+    relabel(results, samples, "credit_event", "no_event", [3, 2, 3], [["A", "C", "B", "D"]], True)
+    assert [results[e].label for e in "ABCD"] == ["credit_event", "credit_event", "credit_event", "no_event"]
+    relabel(results, samples, "credit_event", "no_event", [0, 0, 1], [], True)
+    assert [results[e].label for e in "ABCD"] == ["credit_event", "no_event", "no_event", "no_event"]
+
+
+def test_credit_unit_runs_cohort_calls_within_budget(tmp_path):
+    answer, chat, budget, _ = _run(ROOT / "units" / "t4-credit-event-2023", tmp_path)
+    assert sum("COHORT QUESTION" in p for p in chat.prompts) == 3
+    assert budget.used <= 24
+
+
+def test_rate_limit_storm_is_bounded(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from baselines.vector_agent.house import HouseClient, HouseConfig
+
+    calls = []
+
+    def refuse(request, timeout):
+        calls.append(1)
+        raise urllib.error.HTTPError("u", 429, "slow down", {"Retry-After": "0"}, io.BytesIO(b""))
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    budget = Budget()
+    client = HouseClient(HouseConfig("http://h", "m", "t"), budget)
+    with pytest.raises(urllib.error.HTTPError):
+        client.complete("s", "u", temperature=0, seed=1, max_tokens=10, timeout=100)
+    assert len(calls) == HouseClient.retries_429 + 1 and budget.used == len(calls)
+    assert client.rate_limited == len(calls)

@@ -44,7 +44,8 @@ def validate(unit: Unit, answer: dict) -> list[str]:
                 ok = s <= c["span_start"] < c["span_end"] <= e and task_text[c["span_start"]:c["span_end"]] == c["claim"]
             else:
                 doc = unit.docs.get(c["doc_id"])
-                ok = (doc is not None and doc.admits(eid) and 0 <= c["span_start"] < c["span_end"] <= len(doc.text)
+                ok = (doc is not None and doc.citable and doc.admits(eid)
+                      and 0 <= c["span_start"] < c["span_end"] <= len(doc.text)
                       and doc.text[c["span_start"]:c["span_end"]] == c["claim"])
             if not ok:
                 problems.append(f"{eid}: claim does not resolve verbatim")
@@ -62,6 +63,8 @@ def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat, budget: B
         f"elapsed={time.monotonic() - start:.1f}s")
     for failure in plan.trace.failures[:20]:
         log(f"  call failure: {failure}")
+    for note in plan.trace.notes:
+        log(f"  {note}")
     if missing:
         raise RuntimeError(f"no usable House forecast for {len(missing)} entities: {missing}")
     rows, claims_by_entity = assemble(unit, results, plan)

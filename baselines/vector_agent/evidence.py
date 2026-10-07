@@ -144,6 +144,21 @@ def task_query(unit: Unit, entity: dict | None) -> Counter:
     return q
 
 
+_INDEX_CACHE: dict[tuple[str, ...], tuple[list[Passage], BM25, list[float]]] = {}
+
+
+def _index(key: tuple[str, ...], docs: list[Doc]) -> tuple[list[Passage], BM25, list[float]]:
+    """Passages, BM25 index and query-independent passage scores, built once per document set."""
+    if key not in _INDEX_CACHE:
+        pool = [p for d in docs for p in split_passages(d)]
+        static = [anchor_score(p.text) - 0.8 * len(_BOILER.findall(p.text))
+                  - 0.35 * len(_RISK_TALK.findall(p.text)) for p in pool]
+        if len(_INDEX_CACHE) > 64:
+            _INDEX_CACHE.clear()
+        _INDEX_CACHE[key] = (pool, BM25(pool), static)
+    return _INDEX_CACHE[key]
+
+
 def entity_passages(unit: Unit, entity: dict, budget_chars: int) -> list[Passage]:
     """Whole small documents first, then the best BM25 passages of large ones, within budget."""
     eid = str(entity["entity_id"])
@@ -160,12 +175,10 @@ def entity_passages(unit: Unit, entity: dict, budget_chars: int) -> list[Passage
         chosen.append(Passage(d.doc_id, 0, len(d.text), d.text))
         used += len(d.text)
     if large and used < budget_chars:
-        pool = [p for d in large for p in split_passages(d)]
-        bm = BM25(pool)
+        pool, bm, static = _index(tuple(d.doc_id for d in large), large)
         raw = bm.scores(task_query(unit, entity))
         top = max(raw) if raw and max(raw) > 0 else 1.0
-        scores = [r / top + anchor_score(p.text) - 0.8 * len(_BOILER.findall(p.text))
-                  - 0.35 * len(_RISK_TALK.findall(p.text)) for r, p in zip(raw, pool)]
+        scores = [r / top + st for r, st in zip(raw, static)]
         order = sorted(range(len(pool)), key=lambda i: scores[i], reverse=True)
         picked: list[Passage] = []
         for i in order:

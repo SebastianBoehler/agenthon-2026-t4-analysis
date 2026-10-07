@@ -31,6 +31,9 @@ def _key() -> str:
 
 
 class LoggedOpenRouter(HouseClient):
+    refund_429 = True  # OpenRouter's rate limits are a property of this harness, not of the House
+    retries_429 = 8
+
     def __init__(self, budget: Budget, log_dir: Path):
         super().__init__(HouseConfig("https://openrouter.ai/api", MODEL, _key()), budget)
         self.log_dir = log_dir

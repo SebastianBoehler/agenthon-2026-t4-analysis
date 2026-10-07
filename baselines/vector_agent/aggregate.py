@@ -87,7 +87,11 @@ def pooled_interval(samples: list[Sample]) -> tuple[float, float]:
                 b = m
         return (a + b) / 2
 
-    return quantile(0.05), quantile(0.95)
+    # A mixture's 5% and 95% points lie within its components' own: clamping only removes
+    # bisection noise.
+    lo_bound = min(c - _Z90 * l for _, c, l, _ in comps)
+    hi_bound = max(c + _Z90 * r for _, c, _, r in comps)
+    return max(lo_bound, quantile(0.05)), min(hi_bound, quantile(0.95))
 
 
 def _round(x: float) -> float:

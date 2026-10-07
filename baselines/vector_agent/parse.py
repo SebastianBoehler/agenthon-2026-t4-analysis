@@ -118,6 +118,13 @@ def to_sample(item: dict, *, target_type: str, labels: list[str], entity_ids: se
         return None
     if target_type == "classification" and label is None:
         return None
+    if target_type == "classification" and (lo is None or hi is None):
+        # A pure-label task defines no numeric quantity: the band is required but unscored, so the
+        # label's probability stands as the number with the uninformative [0, 1] band.
+        if point is None and prob is not None:
+            point = prob
+        if point is None or 0.0 <= point <= 1.0:
+            lo, hi = 0.0, 1.0
     if lo is not None and hi is not None and lo > hi:
         lo, hi = hi, lo
     sigma = number(item.get("sigma"))

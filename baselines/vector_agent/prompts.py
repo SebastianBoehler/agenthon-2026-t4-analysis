@@ -62,7 +62,9 @@ def _type_rules(unit: Unit) -> str:
             "(0 to 1) that this label is correct.\n"
             "- point_forecast, lo, hi: the numeric quantity the task asks you to forecast, in the "
             "task's units (for example the EPS value, the abnormal return in percent, the revised "
-            "value, or the event probability when the task asks for a probability). Keep label "
+            "value, or the event probability when the task asks for a probability). If the task "
+            "defines no numeric quantity at all, set point_forecast to the probability of your label, "
+            "lo to 0 and hi to 1. Keep label "
             "and point_forecast consistent with the label definitions.\n"
             "- Apply the label definitions literally: an event label is met when ANY condition it "
             "lists is expected to occur within the task’s forecast window. An announced or pending "
@@ -88,8 +90,10 @@ value is the baseline. Otherwise use no change: zero for a change or growth targ
 stays at the table's base value), the latest observed print for a level or rate. Figures you \
 read or compute from the excerpts are signals, not the baseline. For a label about a direction \
 or an event, the baseline is the base rate: how often each label has occurred for comparable \
-cases in the history shown (a single latest observation is a noisy guide). Your forecast is \
-scored relative to that baseline: you gain only by being closer to the outcome.
+cases in the history shown (a single latest observation is a noisy guide). When the evidence \
+shows no such history, do not anchor on population-wide base rates: the entities were selected \
+for this question, so judge each one's probability from its own specific evidence. Your \
+forecast is scored relative to that baseline: you gain only by being closer to the outcome.
 2. Signals. Work through the drivers the task names and what the evidence says about each: \
 trends, mean reversion, announced or scheduled information, positioning, guidance, solvency. \
 Turn them into an expected direction and size over the forecast horizon.
@@ -243,17 +247,40 @@ def reasons_prompt(unit: Unit, answers: list[dict], candidates: list[tuple[str, 
     for key, text, doc_id, applies in candidates:
         parts.append(f"[{key}] (from {doc_id}; applies to {applies}) {text}")
     parts.append(
-        "Write up to 3 reasons that explain the submitted forecasts, strongest first. Each reason "
-        "rests on ONE candidate premise. Prefer reasons about the main drivers the task names, each "
-        "covering as many entities as it truly applies to; together the reasons should cover the "
-        "drivers behind most of the forecasts. mechanism (at most 60 words) explains why that fact "
-        "moves the forecast: use only figures the premise states, and attribute them only to the "
-        "entity the premise is about. answer_implication (at most 50 words) names the entity_ids "
-        "it concerns with their submitted labels or point forecasts as shown above, and the "
-        "direction the fact pushes them. Use plain prose; do not mention files, paths, or scoring."
+        "Write exactly 3 reasons (fewer only if the candidates cannot support 3), strongest first. "
+        "Each reason is about ONE driver: one of the most important factors behind these forecasts, "
+        "preferably a driver the task text names. Choose drivers so that together they explain most "
+        "of the forecasts, and let each driver cover every entity it truly affects. For each reason:\n"
+        "- premise: the candidate key that states the driver most directly;\n"
+        "- support: up to 3 other candidate keys showing the same driver, preferably for other entities;\n"
+        "- mechanism (at most 60 words): why this driver moves the forecast; use only figures stated in "
+        "the premise or support, attributed only to the entity they are about;\n"
+        "- answer_implication (at most 70 words): name each affected entity_id with its submitted label "
+        "or point forecast as shown above, and the direction this driver pushes it;\n"
+        "- entities: the affected entity_ids.\n"
+        "Use plain prose; do not mention files, paths, or scoring."
     )
     parts.append(
-        'OUTPUT: exactly one JSON object {"reasons": [{"premise": "<candidate key, e.g. R3>", '
-        '"mechanism": "...", "answer_implication": "...", "entities": ["<entity_id>", ...]}]}'
+        'OUTPUT: exactly one JSON object {"reasons": [{"driver": "<short name>", "premise": "<key, e.g. R3>", '
+        '"support": ["<key>", ...], "mechanism": "...", "answer_implication": "...", "entities": ["<entity_id>", ...]}]}'
     )
     return "\n\n".join(parts)
+
+
+_EVIDENCE_START = ("EVIDENCE DOCUMENTS", "EVIDENCE EXCERPTS")
+_EVIDENCE_END = "How to forecast:"
+
+
+def shrink_evidence(prompt: str, factor: float) -> str:
+    """Keep the task, table and instructions; keep only the first ``factor`` of the evidence,
+    cut at a document boundary."""
+    start = min((i for i in (prompt.find(m) for m in _EVIDENCE_START) if i >= 0), default=-1)
+    end = prompt.find(_EVIDENCE_END)
+    if start < 0 or end <= start:
+        return prompt
+    body = prompt[start:end]
+    keep = int(len(body) * factor)
+    cut = max(body.rfind("\n\n=== ", 0, keep), body.rfind("\n\n[E", 0, keep))
+    kept = body[: cut if cut > len(body) // 20 else keep]
+    return prompt[:start] + kept + "\n\n[further evidence omitted for length]\n\n" + prompt[end:]
+

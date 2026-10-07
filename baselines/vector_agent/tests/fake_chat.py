@@ -16,7 +16,9 @@ _DOC = re.compile(r"^(?:=== |\[E\d+\] )(\S+) \|.*\n(.+)$", re.MULTILINE)
 class FakeChat:
     """Answers from the prompt. ``faults`` maps a call index to a fault name."""
 
-    def __init__(self, faults: dict[int, str] | None = None, delay: float = 0.0, seed: int = 0):
+    def __init__(self, faults: dict[int, str] | None = None, delay: float = 0.0, seed: int = 0,
+                 no_numbers: bool = False):
+        self.no_numbers = no_numbers
         self.faults = faults or {}
         self.delay = delay
         self.calls = 0
@@ -45,6 +47,9 @@ class FakeChat:
                 {"premise": k, "mechanism": "Synthetic mechanism text for wiring.",
                  "answer_implication": "Synthetic implication for wiring.", "entities": []}
                 for k in keys[:3]]})
+        if "COHORT QUESTION" in user:
+            ids = [json.loads(r)["entity_id"] for r in _ROW.findall(user)]
+            return json.dumps({"expected_count": max(1, len(ids) // 2), "ranking": ids, "why": "synthetic"})
         rows = [json.loads(r) for r in _ROW.findall(user)]
         focus = _FOCUS.search(user)
         if focus:
@@ -65,6 +70,10 @@ class FakeChat:
                 words = line.split()[:12]
                 item["evidence"] = [{"doc_id": doc_id, "quote": " ".join(words)}]
             preds.append(item)
+        if self.no_numbers:
+            for item in preds:
+                for key in ("point_forecast", "lo", "hi", "baseline"):
+                    item[key] = None
         if fault == "drop_one" and len(preds) > 1:
             preds = preds[1:]
         body = json.dumps({"predictions": preds} if not focus else preds[0])

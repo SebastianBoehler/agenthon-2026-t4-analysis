@@ -8,6 +8,7 @@ wall-clock schedule; every forecast in the answer comes from model samples.
 from __future__ import annotations
 
 import time
+import urllib.error
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 from . import prompts
 from .aggregate import Forecast, combine
 from .consistency import ground_growth, percent_growth_target
+from . import cohort
 from .claims import build_reasons, entity_claims, reason_candidates
 from .evidence import Passage, entity_passages
 from .house import Budget, BudgetExhausted, Chat
@@ -63,6 +65,7 @@ class Trace:
     launched: Counter = field(default_factory=Counter)
     succeeded: Counter = field(default_factory=Counter)
     failures: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 class Planner:
@@ -90,6 +93,10 @@ class Planner:
         self.unit_prompt: str | None = None
         self.growth = percent_growth_target(unit.task)
         self.rows = {str(e["entity_id"]): e for e in unit.entities}
+        self.event = cohort.event_labels(unit.labels) if unit.target_type == "classification" else None
+        self.cohort_counts: list[float] = []
+        self.cohort_rankings: list[list[str]] = []
+        self.cohort_prompt: str | None = None
         n = max(1, len(self.ids))
         if self.full:
             self.groups = _chunks(self.ids, GROUP_MAX_FULL)
@@ -97,6 +104,8 @@ class Planner:
             focus = len(self.groups) > 1
             self.group_prompts = [prompts.unit_prompt(unit, docs, g if focus else None) for g in self.groups]
             self.target = UNIT_SAMPLES
+            if self.event:
+                self.cohort_prompt = cohort.question(_head(prompts.unit_prompt(unit, docs)), self.event[0], n)
             return
         for e in unit.entities:
             self.passages[str(e["entity_id"])] = entity_passages(unit, e, ENTITY_EVIDENCE_CHARS)
@@ -114,7 +123,13 @@ class Planner:
                 share = max(2500, min(ENTITY_EVIDENCE_CHARS, GROUP_EVIDENCE_CHARS // len(g)))
                 excerpts = {eid: _trim(self.passages[eid], share) for eid in g}
                 self.group_prompts.append(prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, excerpts), g))
-        spare = 24 - REASONS_RESERVE - 2 - (1 if self.unit_prompt else 0)
+        if self.event:
+            share = max(2500, QUICK_EVIDENCE_CHARS // n)
+            compact = {eid: _trim(ps, share) for eid, ps in self.passages.items()}
+            self.cohort_prompt = cohort.question(
+                _head(prompts.unit_prompt(unit, prompts.unit_docs_excerpts(unit, compact))), self.event[0], n)
+        spare = (24 - REASONS_RESERVE - 2 - (1 if self.unit_prompt else 0)
+                 - (cohort.COHORT_CALLS if self.event else 0))
         self.target = max(1, min(MAX_ENTITY_SAMPLES, spare // len(self.groups)))
 
     def _entity_prompt(self, eid: str) -> str:
@@ -166,6 +181,11 @@ class Planner:
         return None
 
     def next_job(self, budget_left: int) -> Job | None:
+        if (self.cohort_prompt and self.attempts["cohort"] < cohort.COHORT_CALLS
+                and self.inflight["cohort"] == 0 and sum(self.done.values()) >= 1):
+            k = self.attempts["cohort"]
+            return Job("cohort", "cohort", tuple(self.ids), self.cohort_prompt, 0.7,
+                       self.seed + 7000 + k, 900, 1.0)
         if self.full:
             order = sorted(range(len(self.groups)), key=lambda i: min(len(self.samples[e]) for e in self.groups[i])
                            + self.inflight[f"g{i}"])
@@ -208,6 +228,16 @@ class Planner:
         if raw is None:
             self.trace.failures.append(f"{job.key}: {error}")
             return
+        if job.kind == "cohort":
+            count, ranking = cohort.parse(raw, set(self.ids))
+            if count is None:
+                self.trace.failures.append("cohort: unusable reply")
+                return
+            self.cohort_counts.append(count)
+            if ranking:
+                self.cohort_rankings.append(ranking)
+            self.trace.succeeded["cohort"] += 1
+            return
         got = parse_predictions(raw, target_type=self.unit.target_type, labels=self.unit.labels,
                                 entity_ids=set(job.ids), weight=job.weight, source=job.kind)
         got = [s for s in got if s.lo is not None and s.hi is not None]
@@ -246,6 +276,12 @@ def _probability_target(unit: Unit, samples: dict[str, list[Sample]]) -> bool:
     return bool(points) and all(0.0 <= p <= 1.0 for p in points)
 
 
+def _head(prompt: str) -> str:
+    """The task, table and evidence of a forecasting prompt, without its method and output rules."""
+    cut = prompt.find("How to forecast:")
+    return prompt[:cut] if cut > 0 else prompt
+
+
 def _trim(passages, budget: int):
     out, used = [], 0
     for p in passages:
@@ -257,8 +293,21 @@ def _trim(passages, budget: int):
 
 
 def _call(chat: Chat, job: Job, timeout: float) -> str:
-    return chat.complete(prompts.SYSTEM, job.prompt, temperature=job.temperature, seed=job.seed,
-                         max_tokens=job.max_tokens, timeout=timeout, thinking=THINKING)
+    """One House call; a request the route rejects as malformed (HTTP 400, e.g. a prompt over the
+    serving context) is retried with the evidence section cut to a half, then a quarter."""
+    deadline = time.monotonic() + timeout
+    prompt = job.prompt
+    for factor in (None, 0.5, 0.25):
+        if factor is not None:
+            prompt = prompts.shrink_evidence(job.prompt, factor)
+        try:
+            return chat.complete(prompts.SYSTEM, prompt, temperature=job.temperature, seed=job.seed,
+                                 max_tokens=job.max_tokens, timeout=max(5.0, deadline - time.monotonic()),
+                                 thinking=THINKING)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400 or factor == 0.25 or deadline - time.monotonic() < 20:
+                raise
+    raise RuntimeError("unreachable")
 
 
 def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Schedule,
@@ -269,7 +318,8 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
     try:
         while True:
             now = time.monotonic() - start
-            while (len(pending) < schedule.workers and now < schedule.launch_stop
+            workers = 2 if getattr(chat, "rate_limited", 0) else schedule.workers  # back off once throttled
+            while (len(pending) < workers and now < schedule.launch_stop
                    and budget.remaining > REASONS_RESERVE):
                 job = plan.next_job(budget.remaining)
                 if job is None:
@@ -299,6 +349,10 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
         fc = combine(plan.samples[eid], unit.target_type, unit_interval=bounded)
         if fc is not None:
             results[eid] = fc
+    if plan.event and len(results) == len(plan.ids):
+        note = cohort.relabel(results, plan.samples, plan.event[0], plan.event[1], plan.cohort_counts,
+                              plan.cohort_rankings, bounded)
+        plan.trace.notes.append(note)
     return results, plan
 
 

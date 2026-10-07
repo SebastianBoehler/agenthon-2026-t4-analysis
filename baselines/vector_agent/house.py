@@ -91,11 +91,15 @@ def strip_reasoning(text: str) -> str:
 
 
 class HouseClient:
+    refund_429 = False  # the House may charge a 429 upstream, so it is not refunded by default
+    retries_429 = 3
+
     def __init__(self, config: HouseConfig, budget: Budget):
         if not config.endpoint:
             raise RuntimeError("MODEL_ENDPOINT is not set")
         self.config = config
         self.budget = budget
+        self.rate_limited = 0  # 429 replies seen; the scheduler lowers concurrency once this is > 0
 
     def payload(self, system: str, user: str, *, temperature: float, seed: int, max_tokens: int,
                 thinking: bool = False) -> dict:
@@ -125,17 +129,19 @@ class HouseClient:
             method="POST",
         )
         deadline = time.monotonic() + timeout
-        for attempt in range(8):
+        for attempt in range(self.retries_429 + 1):
             self.budget.take()
             try:
                 with urllib.request.urlopen(request, timeout=max(5.0, deadline - time.monotonic())) as response:
                     body = json.loads(response.read().decode("utf-8"))
                 break
             except urllib.error.HTTPError as exc:
-                if exc.code in (401, 403):
+                if exc.code in (401, 403) or (exc.code == 429 and self.refund_429):
                     self.budget.refund()  # authentication refusal before admission; 429 may be upstream
+                if exc.code == 429:
+                    self.rate_limited += 1
                 left = deadline - time.monotonic()
-                if exc.code != 429 or left < 15:
+                if exc.code != 429 or left < 15 or attempt == self.retries_429:
                     raise
                 wait = _retry_after(exc) or min(2.0 ** attempt, 12.0)
                 time.sleep(min(wait + random.uniform(0, 1.5), left - 10))
