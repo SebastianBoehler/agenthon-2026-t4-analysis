@@ -1,6 +1,8 @@
 ## Executive summary (read this first)
 
-`vector_agent` is the Track 4 `analyze` agent: it forecasts every roster row from sampled House replies, with claims that quote admitted pre-cutoff documents word for word. Every forecast comes from the model. Robustness comes from concurrency, retries and redundant prompts, never from substitute predictions. Local runs check wiring, timing and reply format. They do not estimate official scores.
+`vector_agent` is the Track 4 `analyze` agent: it forecasts every roster row from sampled House replies, with claims that quote admitted pre-cutoff documents word for word. House forecasts are combined deterministically. Concurrency, retries and redundant prompts improve coverage.
+
+There is one user-approved recovery exception. An entity with no House reply after every attempt, because the route is unreachable, the forecast step crashed or self-validation failed, gets a carry-forward row (`degraded.py`), and `evidence_trace` reports it. Local runs check wiring, timing and reply format. They do not estimate official scores.
 
 ## How a unit is answered
 
@@ -23,15 +25,24 @@
   - Band: 5th and 95th percentiles of the pooled sample distributions, after removing outlying samples and runaway widths. A band edge more than 5 sigma from a sample's own point (a dropped digit, for example) is replaced by ±1.645 sigma. Probability bands are clipped to [0, 1].
 - **Event labels.** For a binary vocabulary of an event and its negation (for example `credit_event` / `no_event`), three cohort calls estimate how many entities will have the event. That many entities get the event label, ranked by pooled event probability, and anything at or above 0.5 always gets it. Asked one entity at a time, the model anchors these probabilities low.
 - **Event-probability bands.** When the numeric quantity is an event probability, the band is the interval-score optimum for a 0/1 outcome: [0, p] below 0.05, [p, 1] above 0.95, and [0, 1] otherwise.
+- **Threshold labels.** When every label is a numeric range of the forecast quantity (for example > +1%, < −1%, in between), the label is the range holding the most probability under the pooled distribution (`thresholds.py`).
+- **Band widths.** Regression and ranking bands are scaled ×1.5 and basis-point change targets ×2. Numeric classification bands use ×2.5. See `ARTIFACT_PROVENANCE.md` for the calibration sources and unresolved Final cutoff eligibility.
 - **Pure-label tasks.** When the task defines no numeric quantity, the label's probability stands as the number, with the band [0, 1].
 - **Percent-growth targets.** Growth is recomputed from the model's own level forecast and the table's base value (`consistency.py`).
+- **Basis-point change targets.** When a row names a percent-level table column (a yield series id, for example), the table statistics restate that column's horizon random-walk sd in basis points. That sd also sets a floor on the band: ±1.645 sd around the point.
 - **Claims.** One or two exact slices of documents the manifest admits for the entity, each at most 399 characters, taken only from documents that have a flat `text` field. The task-table row is used only when no such document is admitted.
-- **Reasons.** Three driver reasons per unit. Each names one main driver, covers every entity it affects, quotes a verbatim premise and cites up to three supporting passages. `submitted_reasons` go into the answer only when they pass the shape, deny-list and byte-cap rules.
+- **Reasons.** The agent requests three driver reasons per unit. It extracts named drivers from the task (`drivers.py`) and supplies relevant premise candidates. Selection prefers three reasons covering all entities; it does not measure or guarantee driver coverage.
+  - The premise candidates start with the passages that best state each named driver.
+  - The model sees the task's entity table, so it can state the base values its forecasts are compared with.
+  - Forecast values appear with six significant digits, following the reasoning grader's view.
+  - Each reason quotes a verbatim premise and cites up to three supporting passages.
+  - `submitted_reasons` go into the answer only when they pass the shape, deny-list and byte-cap rules.
 - **Oversized prompts.** A prompt rejected with HTTP 400 is retried with half, then a quarter, of its evidence.
 - **Budget.**
   - At most 24 requests per unit; thinking is disabled.
-  - 4 concurrent calls.
-  - No new calls after 300 s, a hard stop at 440 s, and reasons by 480 s.
+  - Four forecast workers; up to two reasons calls can run concurrently.
+  - For a 600-second card, ordinary forecast launches stop by 400 seconds and forecast collection stops by 460 seconds. Coverage attempts can override ordinary launch timing. Extra samples target completion before 390 seconds. Reasons use the remaining window through 500 seconds; their start is not guaranteed by 390 seconds.
+  - Deadlines scale from a supported mounted card timeout. These defaults do not establish the unpublished Final resource limits.
   - The answer is written atomically and the process then exits at once.
 
 ## Run and check
