@@ -1,10 +1,11 @@
-# Runtime sources and license only. The House route, token and model name are injected at run time.
+# Runtime sources, provenance and license. House access is injected at run time.
 # The harness appends: analyze --task /input/task.json --corpus /input/corpus/ --out /output/answer.json
 FROM python:3.13-slim
 LABEL qfbench2.interface_version="2.0"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY baselines/vector_agent/*.py ./baselines/vector_agent/
+COPY baselines/vector_agent/ARTIFACT_PROVENANCE.md ./baselines/vector_agent/
 COPY LICENSE ./LICENSE
 ENTRYPOINT ["python", "-m", "baselines.vector_agent.cli"]
 CMD ["analyze", "--help"]

@@ -44,17 +44,12 @@ REASONS_RESERVE = 2  # held back from launches once covered, so one failed reaso
 REASONS_ATTEMPTS = 3  # while budget and the reasons window allow; a failed call costs only its request
 REASONS_HEDGE = 2  # reasons calls in flight at once
 REASONS_MIN_WINDOW = 30.0  # seconds before reasons_stop: a late reasons call still gets a short timeout
-# Band-width constants include practice-derived and private-informed choices.
-# ARTIFACT_PROVENANCE.md records their sources and unresolved cutoff eligibility.
-# Regression and ranking bands: global multiplier chosen by a rule frozen before any outcome
-# was seen (best on 6 units, better on 5 of them, leave-one-out stable).
-BAND_SCALE = 1.5
-# Basis-point change targets (Treasury yields over weeks): both rate practice units missed every
-# outcome with the model's bands; 2x is the user's in-sample choice, below the 2.4-3x optimum.
-YIELD_BAND_SCALE = 2.0
-# Classification bands on numeric quantities (EPS, an abnormal return, a revised level):
-# 2.5x has private-informed selection history, not an independently reproduced practice-only rule.
-CLASS_BAND_SCALE = 2.5
+# Preserve pooled sample intervals and the corpus-derived floor without learned rescaling.
+# These identity values are chosen independently of realized outcomes. The former values
+# and their practice/private selection history remain disclosed in ARTIFACT_PROVENANCE.md.
+BAND_SCALE = 1.0
+YIELD_BAND_SCALE = 1.0
+CLASS_BAND_SCALE = 1.0
 COVER_MIN_WINDOW = 60.0  # seconds before hard_stop in which a call for an uncovered entity still launches
 ANSWER_BYTES_CAP = 2900  # the reasoning grader reads at most 3000 bytes of per-entity answers
 MAX_FULL_GROUPS = 16

@@ -26,7 +26,7 @@ There is one user-approved recovery exception. An entity with no House reply aft
 - **Event labels.** For a binary vocabulary of an event and its negation (for example `credit_event` / `no_event`), three cohort calls estimate how many entities will have the event. That many entities get the event label, ranked by pooled event probability, and anything at or above 0.5 always gets it. Asked one entity at a time, the model anchors these probabilities low.
 - **Event-probability bands.** When the numeric quantity is an event probability, the band is the interval-score optimum for a 0/1 outcome: [0, p] below 0.05, [p, 1] above 0.95, and [0, 1] otherwise.
 - **Threshold labels.** When every label is a numeric range of the forecast quantity (for example > +1%, < −1%, in between), the label is the range holding the most probability under the pooled distribution (`thresholds.py`).
-- **Band widths.** Regression and ranking bands are scaled ×1.5 and basis-point change targets ×2. Numeric classification bands use ×2.5. See `ARTIFACT_PROVENANCE.md` for the calibration sources and unresolved Final cutoff eligibility.
+- **Band widths.** All global multipliers are 1.0: pooled intervals and the corpus-derived floor receive no learned rescaling. [ARTIFACT_PROVENANCE.md](ARTIFACT_PROVENANCE.md) discloses the removed multipliers and historical selection decisions.
 - **Pure-label tasks.** When the task defines no numeric quantity, the label's probability stands as the number, with the band [0, 1].
 - **Percent-growth targets.** Growth is recomputed from the model's own level forecast and the table's base value (`consistency.py`).
 - **Basis-point change targets.** When a row names a percent-level table column (a yield series id, for example), the table statistics restate that column's horizon random-walk sd in basis points. That sd also sets a floor on the band: ±1.645 sd around the point.
@@ -54,4 +54,4 @@ python -m baselines.vector_agent.tests.fake_house_server --delay 30 --fault-ever
 python -m baselines.vector_agent.tests.run_local --out <dir> [unit ...]               # hosted Nemotron via OpenRouter; key in git-ignored .env
 ```
 
-Validate answers with the organizer's current checker: `check_claim_rules` in `baselines/guardrails_example/citation_rail.py` (scorer 5.2.2), the toolkit schema, and `qfbench2-smoke --track analysis`.
+Validate answers with the [published organizer checker](https://github.com/Agenthon-2026/track4-analysis-public/blob/11852111d268766fef7772ce5edfaccc1718c763/baselines/guardrails_example/citation_rail.py), the toolkit schema, and the current official scorer 5.3.0. The retained in-tree checker and smoke runs do not establish production NLI parity or an official score.
