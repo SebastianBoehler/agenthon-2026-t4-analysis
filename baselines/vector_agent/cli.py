@@ -103,7 +103,7 @@ def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat | None, bu
         log(f"  {note}")
     rows_by_id = {str(e["entity_id"]): e for e in unit.entities}
     missing = [eid for eid in unit.entity_ids if eid not in results]
-    for eid in missing:  # the organizers require an answer even without the House (README)
+    for eid in missing:  # user-approved degraded recovery for absent House forecasts
         results[eid] = degraded_forecast(unit, rows_by_id[eid])
     if missing:
         log(f"  degraded: {len(missing)} of {len(unit.entity_ids)} entities without a House forecast")
@@ -141,6 +141,13 @@ def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat | None, bu
         rows, _ = assemble(unit, results, _plan_without_house(unit, seed))
         answer.update(entity_predictions=rows, notes={"degraded": "self-validation failed"})
         answer.pop("submitted_reasons", None)
+        reason_note = "removed (self-validation failed)"
+        answer["evidence_trace"] = (
+            f"degraded: {len(unit.docs)} admitted documents dated on or before "
+            f"{unit.task.get('cutoff_date')}; {budget.used} House requests; self-validation failed; "
+            f"all {len(unit.entity_ids)} entities carry the task table forward; claims quote "
+            f"the task table or admitted documents verbatim; reasons {reason_note}."
+        )
         problems = validate(unit, answer)
         if problems:
             raise RuntimeError("answer failed self-validation: " + "; ".join(problems[:10]))

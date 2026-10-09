@@ -1,11 +1,10 @@
 """Carry-forward answers for entities that have no House forecast at all.
 
-The organizers require a schema-valid answer.json even when the model API is unreachable
-(README, "degrade gracefully"); a unit without an answer scores no better than the worst
-admissible one. Only an entity with no usable House reply after every attempt gets one of these
-rows, and the answer's evidence_trace says how many did. Points carry the table forward (no change
-for a change target, the row's latest value for a level), labels take the non-event or first
-label, and bands are deliberately wide.
+The user approved this recovery policy for absent forecasts and failed self-validation.
+Only an entity with no usable House reply after every attempt gets one of these rows during
+ordinary recovery; failed self-validation replaces all rows. The evidence trace discloses the
+replacement. Points carry the table forward: zero for a change target, the row's latest value
+for a level. Labels take the non-event or first label, and bands are deliberately wide.
 """
 from __future__ import annotations
 
@@ -15,7 +14,8 @@ import re
 from .aggregate import Forecast
 from .unit import Unit
 
-_CHANGE = re.compile(r"change|growth|revision|delta|surprise|return|reaction|yoy|mom|bps", re.IGNORECASE)
+_CHANGE = re.compile(r"change|growth|revision|delta|surprise|return|reaction|yoy|mom", re.IGNORECASE)
+_SCALE_FIELD = re.compile(_CHANGE.pattern + r"|bps", re.IGNORECASE)
 _PRIOR = re.compile(r"latest|prior|previous|last|current|start", re.IGNORECASE)
 _NEGATION = re.compile(r"^(?:no|non|not)[_\- ]", re.IGNORECASE)
 NOTE = "degraded: no House forecast for this entity; carried forward from the task table"
@@ -33,7 +33,7 @@ def degraded_forecast(unit: Unit, row: dict) -> Forecast:
     eid = str(row["entity_id"])
     nums = _numbers(row)
     prior = next((v for k, v in nums.items() if _PRIOR.search(k)), None)
-    same_kind = [abs(v) for k, v in nums.items() if _CHANGE.search(k)]
+    same_kind = [abs(v) for k, v in nums.items() if _SCALE_FIELD.search(k)]
     if unit.target_type == "classification":
         labels = unit.labels
         label = next((x for x in labels if _NEGATION.match(x)), labels[0] if labels else None)

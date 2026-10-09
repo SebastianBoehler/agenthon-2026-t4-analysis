@@ -56,8 +56,17 @@ def locate(doc: Doc, quote: str) -> tuple[int, int] | None:
 
 
 def _substantive(text: str) -> bool:
-    """A figure, or several content words: never a content-free quotation."""
+    """A figure or several content words; official semantic rules are checked separately."""
     return bool(re.search(r"\d", text)) or len(tokens(text)) >= 6
+
+
+def claim_is_entity_name(unit: Unit, text: str) -> bool:
+    """A roster name alone identifies an entity but states no fact about it."""
+    def normalized(value: str) -> str:
+        return " ".join(unicodedata.normalize("NFKC", value).casefold().split()).strip(" .:;!?")
+    quote = normalized(text)
+    return any(quote == normalized(e["name"]) for e in unit.entities
+               if isinstance(e.get("name"), str) and e["name"].strip())
 
 
 def _claim(doc_id: str, text: str, s: int, e: int) -> dict:
@@ -81,6 +90,8 @@ def entity_claims(unit: Unit, entity: dict, samples: list[Sample], hint: str,
         if key in seen or any(k[0] == doc.doc_id and k[1] < e and s < k[2] for k in seen):
             return
         if not 25 <= e - s <= MAX_CLAIM_CHARS or not _substantive(doc.text[s:e]):
+            return
+        if claim_is_entity_name(unit, doc.text[s:e]):
             return
         seen.add(key)
         claims.append(_claim(doc.doc_id, doc.text, s, e))
