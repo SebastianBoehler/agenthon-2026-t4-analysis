@@ -216,14 +216,15 @@ class Planner:
         return (points[-1] - points[0]) / half if half > 0 else 0.0
 
     def _rescue(self) -> Job | None:
-        """An entity that group replies keep missing is asked for on its own."""
-        for idx, g in enumerate(self.groups):
-            if self.inflight[f"g{idx}"] or idx in self.retired:
-                continue
-            for eid in g:
-                if len(self.samples[eid]) < 2 and self.inflight[eid] == 0 and self.attempts[eid] < 3 \
-                        and (len(g) > 1 or self.attempts[f"g{idx}"] >= self.target + 2):
-                    return self._job("entity", eid, [eid], self._entity_prompt(eid))
+        """Rescue uncovered entities before adding a second sample to covered ones."""
+        for count in (0, 1):
+            for idx, g in enumerate(self.groups):
+                if self.inflight[f"g{idx}"] or idx in self.retired:
+                    continue
+                for eid in g:
+                    if len(self.samples[eid]) == count and self.inflight[eid] == 0 and self.attempts[eid] < 3 \
+                            and (len(g) > 1 or self.attempts[f"g{idx}"] >= self.target + 2):
+                        return self._job("entity", eid, [eid], self._entity_prompt(eid))
         return None
 
     def next_job(self, budget_left: int, extras: bool = False) -> Job | None:
