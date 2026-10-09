@@ -37,6 +37,7 @@ There is one user-approved recovery exception. An entity with no House reply aft
   - Forecast values appear with six significant digits, following the reasoning grader's view.
   - Each reason quotes a verbatim premise and cites up to three supporting passages.
   - `submitted_reasons` go into the answer only when they pass the shape, deny-list and byte-cap rules.
+  - Deny-list detection handles Unicode formatting and look-alikes. Normalized content duplicates do not fill reason slots. Evidence-byte checks count the published URI masking; the byte plan remains advisory.
 - **Oversized prompts.** A prompt rejected with HTTP 400 is retried with half, then a quarter, of its evidence.
 - **Budget.**
   - At most 24 requests per unit; thinking is disabled.

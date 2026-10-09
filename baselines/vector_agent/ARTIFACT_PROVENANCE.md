@@ -5,6 +5,10 @@ all three global interval multipliers were replaced with identity values (1.0).
 This choice preserves pooled model intervals and the existing corpus-derived floor
 without empirical rescaling. It does not depend on prediction accuracy.
 
+Optional reasons also use the published Unicode detection, content-duplicate and
+URI evidence-masking checks. Those corrections address reproduced contract failures;
+their selection does not use outcome scores or proxy-judge quality.
+
 The earlier candidate had private-outcome-informed choices. Those choices and
 their research history remain disclosed below. This source checkpoint is not a
 new image, submission, verified production score or complete Final qualification.
@@ -80,6 +84,19 @@ scheduling and parsing controls remain relevant. Passing them establishes code
 behavior, not official prediction performance or unseen-family transfer.
 
 ## Measurement and outstanding qualification
+
+The reasons correction starts from `a017121b45344c2c9ca04b7d0bd9d895d8e4b67e`.
+Synthetic controls reproduce three defects with the published 5.3 advisory rail:
+an invisible-character deny-list bypass, normalized content duplicates, and cited
+evidence exceeding its cap after URI masking. The participant filters invalid
+text and duplicates before selecting three reasons, and counts masked evidence
+before keeping support citations. Literal retained premises and document offsets
+remain unchanged. Forecasts and per-entity claims are outside this correction.
+
+The byte count is conservative: it retains list brackets and unmasked reason text.
+The published rail's plan is advisory; it does not prove equivalence to the sealed
+Final renderer, semantic reason quality, or a reasoning-score gain. The 399-character
+claim limit is a participant heuristic, not proof of the 400-judge-token limit.
 
 Published official scorer 5.3.0 is pinned to
 `11852111d268766fef7772ce5edfaccc1718c763`. Development now uses Final's NLI

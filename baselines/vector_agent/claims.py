@@ -14,10 +14,11 @@ from functools import lru_cache
 
 from .evidence import SMALL_DOC_CHARS, Passage, best_segments, scored_segments, segments, task_query, tokens
 from .parse import Sample
+from .reason_text import fold_for_detection, mask_evidence_uris, reason_key
 from .unit import Doc, Unit, task_table_text
 
 CLAIMS_PER_ENTITY = 2
-MAX_CLAIM_CHARS = 399  # judge tokens never exceed NFKC characters, so 400 tokens cannot be reached
+MAX_CLAIM_CHARS = 399  # character heuristic; the 400-judge-token cap needs the judge tokenizer
 DENY = (
     "leaderboard", "canary", "/home/", "units/", "reference/", "outcome.json", "team_id",
     "team name", "participant_id", "participant name", "submission_id", "other submission",
@@ -122,7 +123,7 @@ def entity_claims(unit: Unit, entity: dict, samples: list[Sample], hint: str,
     if not claims:
         text, ranges = task_table_text(unit.task)
         s, e = ranges[eid]
-        if e - s > MAX_CLAIM_CHARS:  # a slice of the row stays under the judge's token cap
+        if e - s > MAX_CLAIM_CHARS:  # keep the quote within the participant character budget
             cut = text.rfind(", ", s, s + MAX_CLAIM_CHARS)
             e = cut if cut > s + 40 else s + MAX_CLAIM_CHARS
         claims.append({"doc_id": "task", "span_start": s, "span_end": e, "claim": text[s:e]})
@@ -208,7 +209,7 @@ def _clean(text: object, limit: int) -> str:
 
 
 def _denied(text: str) -> bool:
-    low = text.lower()
+    low = fold_for_detection(text).lower()
     return any(tok in low for tok in DENY) or "://" in low
 
 
@@ -240,8 +241,10 @@ def _key_of(value: object) -> str:
 def _within_caps(reasons: list[dict], texts: dict[tuple[str, int, int], str]) -> bool:
     judged = [{k: r[k] for k in ("reason_id", "premise", "mechanism", "answer_implication")} for r in reasons]
     evidence = [{"reason_id": r["reason_id"], "doc_id": c["doc_id"], "span_start": c["span_start"],
-                 "span_end": c["span_end"], "text": texts[(c["doc_id"], c["span_start"], c["span_end"])]}
+                 "span_end": c["span_end"],
+                 "trusted_text": mask_evidence_uris(texts[(c["doc_id"], c["span_start"], c["span_end"])])}
                 for r in reasons for c in r["citations"]]
+    # Keep list brackets (+2 bytes) and raw reason text: conservative, not the sealed renderer.
     return (len(json.dumps(judged, ensure_ascii=False, separators=(",", ":")).encode()) <= REASON_BYTES_CAP
             and len(json.dumps(evidence, ensure_ascii=False, separators=(",", ":")).encode()) <= EVIDENCE_BYTES_CAP)
 
@@ -263,6 +266,7 @@ def build_reasons(unit: Unit, reply: dict | None, candidates: list[tuple[str, di
 
     reasons: list[dict] = []
     used: set[str] = set()
+    content_keys: set[tuple[str, str, str]] = set()
     for item in reply["reasons"]:
         if not isinstance(item, dict) or len(reasons) >= 3:
             continue
@@ -276,6 +280,9 @@ def build_reasons(unit: Unit, reply: dict | None, candidates: list[tuple[str, di
             continue
         if _denied(mechanism) or _denied(implication) or _AGAINST.search(implication):
             continue  # an implication arguing against the submitted answer contradicts it
+        content_key = reason_key(cand["claim"], mechanism, implication)
+        if content_key in content_keys:
+            continue
         used.add(key)
         citations = [cite_of(cand)]
         for extra in (item.get("support") or [])[:MAX_SUPPORT + 1]:
@@ -299,4 +306,5 @@ def build_reasons(unit: Unit, reply: dict | None, candidates: list[tuple[str, di
             reason["citations"].pop()
         if _within_caps(reasons + [reason], texts):
             reasons.append(reason)
+            content_keys.add(content_key)
     return reasons
