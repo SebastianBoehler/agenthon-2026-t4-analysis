@@ -10,6 +10,7 @@ import math
 import re
 
 from .parse import Sample
+from .tables import PERCENT_LEVEL, horizon_sds
 
 _GROWTH = re.compile(r"growth|yoy", re.IGNORECASE)
 _PERCENT = re.compile(r"pct|percent", re.IGNORECASE)
@@ -52,3 +53,35 @@ def ground_growth(sample: Sample, row: dict) -> Sample:
         sample.lo += shift
         sample.hi += shift
     return sample
+
+
+_BPS = re.compile(r"bps|basis.points", re.IGNORECASE)
+FLOOR_MIN_CHANGES = 8  # fewer steps give too noisy a spread to override the model's band
+
+
+def bps_change_target(task: dict) -> bool:
+    target = task.get("target") or {}
+    name = str(target.get("name", ""))
+    units = " ".join(str(r.get("unit", "")) for r in task.get("entities") or [] if isinstance(r, dict))
+    return target.get("type") == "regression" and "change" in (name + " " + units).lower() and bool(
+        _BPS.search(name + " " + units))
+
+
+def change_sd_floor(task: dict, docs, horizon_days: int | None) -> dict[str, float]:
+    """For a basis-point change target whose table row names a percent-level table column (a
+    yield series id, say), the random-walk sd of that column's change over the horizon, in bps.
+    A model-stated band narrower than this ignores the evidence's own volatility."""
+    if not bps_change_target(task) or not horizon_days:
+        return {}
+    spreads: dict[str, tuple[float, float]] = {}
+    for doc in docs:
+        for column, value in horizon_sds(doc.text, horizon_days, FLOOR_MIN_CHANGES).items():
+            spreads.setdefault(column, value)
+    out: dict[str, float] = {}
+    for row in task.get("entities") or []:
+        for value in row.values():
+            hit = spreads.get(str(value)) if isinstance(value, str) else None
+            if hit and hit[1] < PERCENT_LEVEL and hit[0] > 0:
+                out[str(row["entity_id"])] = hit[0] * 100.0
+                break
+    return out

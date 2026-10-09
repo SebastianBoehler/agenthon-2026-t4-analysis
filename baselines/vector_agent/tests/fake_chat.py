@@ -9,6 +9,7 @@ import time
 
 _ROW = re.compile(r"^\{\"entity_id\": .*\}$", re.MULTILINE)
 _FOCUS = re.compile(r"^FOCUS ENTITY: (\S+)$", re.MULTILINE)
+_ONLY = re.compile(r"^FORECAST ONLY THESE ENTITIES[^:]*: (.+)$", re.MULTILINE)
 _LABELS = re.compile(r"^Allowed labels: (.+)\.$", re.MULTILINE)
 _DOC = re.compile(r"^(?:=== |\[E\d+\] )(\S+) \|.*\n(.+)$", re.MULTILINE)
 
@@ -43,9 +44,11 @@ class FakeChat:
             return "I cannot answer that."
         if "CANDIDATE PREMISES" in user:
             keys = re.findall(r"^\[(R\d+)\]", user, re.MULTILINE)
+            forecasts = user.split("SUBMITTED FORECASTS", 1)[-1].split("CANDIDATE PREMISES", 1)[0]
+            ids = list(dict.fromkeys(re.findall(r'"entity_id": "([^"]+)"', forecasts)))
             return json.dumps({"reasons": [
                 {"premise": k, "mechanism": "Synthetic mechanism text for wiring.",
-                 "answer_implication": "Synthetic implication for wiring.", "entities": []}
+                 "answer_implication": "Synthetic implication for wiring.", "entities": ids}
                 for k in keys[:3]]})
         if "COHORT QUESTION" in user:
             ids = [json.loads(r)["entity_id"] for r in _ROW.findall(user)]
@@ -54,6 +57,10 @@ class FakeChat:
         focus = _FOCUS.search(user)
         if focus:
             rows = [r for r in rows if r["entity_id"] == focus.group(1)]
+        only = _ONLY.search(user)
+        if only:
+            wanted = {x.strip() for x in only.group(1).split(",")}
+            rows = [r for r in rows if r["entity_id"] in wanted]
         labels_m = _LABELS.search(user)
         labels = [x.strip() for x in labels_m.group(1).split(",")] if labels_m else []
         docs = _DOC.findall(user)

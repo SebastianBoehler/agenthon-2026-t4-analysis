@@ -100,6 +100,8 @@ class HouseClient:
         self.config = config
         self.budget = budget
         self.rate_limited = 0  # 429 replies seen; the scheduler lowers concurrency once this is > 0
+        self._cool_lock = threading.Lock()
+        self._cool_until = 0.0  # after a 429 every worker waits out the same backoff before retrying
 
     def payload(self, system: str, user: str, *, temperature: float, seed: int, max_tokens: int,
                 thinking: bool = False) -> dict:
@@ -130,6 +132,10 @@ class HouseClient:
         )
         deadline = time.monotonic() + timeout
         for attempt in range(self.retries_429 + 1):
+            with self._cool_lock:
+                pause = self._cool_until - time.monotonic()
+            if pause > 0:
+                time.sleep(max(0.0, min(pause, deadline - time.monotonic() - 15)))
             self.budget.take()
             try:
                 with urllib.request.urlopen(request, timeout=max(5.0, deadline - time.monotonic())) as response:
@@ -144,6 +150,8 @@ class HouseClient:
                 if exc.code != 429 or left < 15 or attempt == self.retries_429:
                     raise
                 wait = _retry_after(exc) or min(2.0 ** attempt, 12.0)
+                with self._cool_lock:
+                    self._cool_until = max(self._cool_until, time.monotonic() + wait)
                 time.sleep(min(wait + random.uniform(0, 1.5), left - 10))
         else:
             raise RuntimeError("House kept refusing with HTTP 429")

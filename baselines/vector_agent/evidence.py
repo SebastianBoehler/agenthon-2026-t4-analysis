@@ -145,10 +145,10 @@ def task_query(unit: Unit, entity: dict | None) -> Counter:
     return q
 
 
-_INDEX_CACHE: dict[tuple[str, ...], tuple[list[Passage], BM25, list[float]]] = {}
+_INDEX_CACHE: dict[tuple, tuple[list[Passage], BM25, list[float]]] = {}
 
 
-def _index(key: tuple[str, ...], docs: list[Doc]) -> tuple[list[Passage], BM25, list[float]]:
+def _index(key: tuple, docs: list[Doc]) -> tuple[list[Passage], BM25, list[float]]:
     """Passages, BM25 index and query-independent passage scores, built once per document set."""
     if key not in _INDEX_CACHE:
         pool = [p for d in docs for p in split_passages(d)]
@@ -183,7 +183,8 @@ def entity_passages(unit: Unit, entity: dict, budget_chars: int) -> list[Passage
         for group in ([d for d in large if d.entity_ids is None], [d for d in large if d.entity_ids is not None]):
             if not group:
                 continue
-            g_pool, bm, static = _index(tuple(sorted(d.doc_id for d in group)), group)
+            # Keyed by content too: two units may ship different excerpts under one doc_id.
+            g_pool, bm, static = _index(tuple(sorted((d.doc_id, len(d.text), hash(d.text)) for d in group)), group)
             raw = bm.scores(query)
             top = max(raw) if raw and max(raw) > 0 else 1.0
             pool += g_pool
@@ -264,6 +265,12 @@ def best_segments(
     ranges: list[tuple[int, int]] | None = None,
 ) -> list[tuple[int, int]]:
     """Rank segments by task relevance, entity mentions, the model's rationale and figures."""
+    return [(s, e) for _, s, e in scored_segments(doc, entity, query, hint, ranges)[:k]]
+
+
+def scored_segments(
+    doc: Doc, entity: dict, query: Counter, hint: str, ranges: list[tuple[int, int]] | None = None,
+) -> list[tuple[float, int, int]]:
     ent = set(entity_terms(entity))
     hint_terms = set(tokens(hint))
     spans = []
@@ -281,4 +288,4 @@ def best_segments(
             score -= 6.0
         scored.append((score, s, e))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [(s, e) for _, s, e in scored[:k]]
+    return scored

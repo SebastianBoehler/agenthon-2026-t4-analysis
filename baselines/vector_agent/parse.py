@@ -59,6 +59,32 @@ def extract_json(raw: str, wanted: tuple[str, ...]) -> dict | None:
     return None
 
 
+def salvage_objects(raw: str, field: str) -> list[dict]:
+    """The complete objects carrying ``field`` in a reply cut off mid-list; an object cut just
+    before its closing brace is closed."""
+    text = _repair(raw)
+    decoder = json.JSONDecoder()
+    out: list[dict] = []
+    i = 0
+    while i < len(text):
+        if text[i] != "{":
+            i += 1
+            continue
+        obj, end = None, i + 1
+        for candidate in (text, text[:i] + text[i:].rstrip().rstrip(",") + "}"):
+            try:
+                obj, end = decoder.raw_decode(candidate, i)
+                break
+            except json.JSONDecodeError:
+                continue
+        if isinstance(obj, dict) and field in obj:
+            out.append(obj)
+            i = end
+        else:
+            i += 1
+    return out
+
+
 def number(value) -> float | None:
     if isinstance(value, bool) or value is None:
         return None

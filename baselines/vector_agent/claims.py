@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections import Counter
 from functools import lru_cache
 
-from .evidence import SMALL_DOC_CHARS, Passage, best_segments, segments, task_query, tokens
+from .evidence import SMALL_DOC_CHARS, Passage, best_segments, scored_segments, segments, task_query, tokens
 from .parse import Sample
 from .unit import Doc, Unit, task_table_text
 
@@ -120,9 +121,14 @@ def entity_claims(unit: Unit, entity: dict, samples: list[Sample], hint: str,
 REASON_CANDIDATES = 30
 
 
-def reason_candidates(unit: Unit, claims_by_entity: dict[str, list[dict]]) -> list[tuple[str, dict]]:
-    """Premise candidates: each entity's claims, then the passages of the smaller documents that
-    best match the drivers the task names (cross-entity premises for broad reasons)."""
+PER_DRIVER = 2
+
+
+def reason_candidates(unit: Unit, claims_by_entity: dict[str, list[dict]], drivers: list[str] | None = None,
+                      ranges: dict[str, list[tuple[int, int]]] | None = None) -> list[tuple[str, dict]]:
+    """Premise candidates: the passages that best state each task-named driver (across entities),
+    then each entity's claims, then the best task-relevant passages of the smaller documents.
+    ``ranges``: where retrieval looked in each large document."""
     out: list[tuple[str, dict]] = []
     seen: set[tuple[str, int, int]] = set()
 
@@ -132,6 +138,27 @@ def reason_candidates(unit: Unit, claims_by_entity: dict[str, list[dict]]) -> li
             return
         seen.add(key)
         out.append((f"R{len(out) + 1}", c))
+
+    for driver in drivers or []:
+        query = Counter({t: 3.0 for t in tokens(driver)})
+        scored = []
+        for doc in unit.docs.values():
+            if not doc.citable:
+                continue
+            doc_ranges = (ranges or {}).get(doc.doc_id)
+            if len(doc.text) > SMALL_DOC_CHARS and not doc_ranges:
+                continue
+            for score, st, en in scored_segments(doc, {}, query, driver, doc_ranges)[:2]:
+                if _substantive(doc.text[st:en]):
+                    scored.append((score, doc, st, en))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        taken = 0
+        for _, doc, st, en in scored:
+            if taken >= PER_DRIVER or len(out) >= REASON_CANDIDATES // 2:
+                break
+            before = len(out)
+            add(dict(_claim(doc.doc_id, doc.text, st, en), driver=driver))
+            taken += len(out) - before
 
     for eid in unit.entity_ids:
         for c in claims_by_entity.get(eid, []):
@@ -150,14 +177,23 @@ def reason_candidates(unit: Unit, claims_by_entity: dict[str, list[dict]]) -> li
 
 
 _KEY_REF = re.compile(r"\s*[\(\[]\s*R\d+(?:\s*[,;/&]\s*R\d+)*\s*[\)\]]")
+_KEY_IN_PARENS = re.compile(r"\s*[,;]\s*R\d{1,2}(?=\s*[\)\]])|(?<=[\(\[])\s*R\d{1,2}\s*[,;]\s*")
 
 
 def _clean(text: object, limit: int) -> str:
     if not isinstance(text, str):
         return ""
     text = _KEY_REF.sub("", text)  # candidate keys mean nothing to the reader
+    text = _KEY_IN_PARENS.sub("", text)
     text = " ".join(text.split())
-    return text[:limit].rstrip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for mark in (". ", "; ", ", "):  # end on the last whole sentence or clause that fits
+        at = cut.rfind(mark)
+        if at >= limit // 2:
+            return cut[:at + 1].rstrip(",; ") + ("" if mark == ". " else ".")
+    return cut.rsplit(" ", 1)[0]
 
 
 def _denied(text: str) -> bool:
@@ -166,6 +202,23 @@ def _denied(text: str) -> bool:
 
 
 MAX_SUPPORT = 3
+CITE_CHARS = 1500  # the judge reads cited passages whole; a paragraph grounds figures a sentence omits
+_AGAINST = re.compile(
+    r"\b(?:conflicts?|contradicts?|inconsistent)\b|\bagainst the submitted\b|\bthan (?:the )?submitted\b"
+    r"|\bsubmitted\b[^.;]{0,60}\b(?:too (?:high|low)|overstat|understat|should)", re.IGNORECASE)
+
+
+def _widen(doc: Doc, start: int, end: int) -> tuple[int, int]:
+    """The paragraph around a span, at most CITE_CHARS long and always containing the span."""
+    text = doc.text
+    a = text.rfind("\n\n", 0, start)
+    b = text.find("\n\n", end)
+    lo, hi = (a + 2 if a >= 0 else 0), (b if b >= 0 else len(text))
+    if hi - lo > CITE_CHARS:
+        room = max(0, CITE_CHARS - (end - start))
+        lo = max(lo, start - room // 2)
+        hi = min(hi, max(end, lo + CITE_CHARS))
+    return min(lo, start), max(hi, end)
 
 
 def _key_of(value: object) -> str:
@@ -189,28 +242,37 @@ def build_reasons(unit: Unit, reply: dict | None, candidates: list[tuple[str, di
         return []
     by_key = dict(candidates)
     roster = set(unit.entity_ids)
-    texts = {(c["doc_id"], c["span_start"], c["span_end"]): c["claim"] for _, c in candidates}
+    texts: dict[tuple[str, int, int], str] = {}
+
+    def cite_of(c: dict) -> dict:
+        doc = unit.docs.get(c["doc_id"])
+        s, e = _widen(doc, c["span_start"], c["span_end"]) if doc is not None else (c["span_start"], c["span_end"])
+        texts[(c["doc_id"], s, e)] = doc.text[s:e] if doc is not None else c["claim"]
+        return {"doc_id": c["doc_id"], "span_start": s, "span_end": e}
+
     reasons: list[dict] = []
     used: set[str] = set()
     for item in reply["reasons"]:
         if not isinstance(item, dict) or len(reasons) >= 3:
             continue
         key = _key_of(item.get("premise"))
+        if key in used:  # a premise already taken: the reason's first unused support passage stands in
+            key = next((k for k in map(_key_of, item.get("support") or []) if k in by_key and k not in used), key)
         cand = by_key.get(key)
         mechanism = _clean(item.get("mechanism"), 600)
-        implication = _clean(item.get("answer_implication"), 600)
+        implication = _clean(item.get("answer_implication"), 800)  # 3 x (399 + 600 + 800) fits the cap
         if cand is None or key in used or not mechanism or not implication:
             continue
-        if _denied(mechanism) or _denied(implication):
-            continue
+        if _denied(mechanism) or _denied(implication) or _AGAINST.search(implication):
+            continue  # an implication arguing against the submitted answer contradicts it
         used.add(key)
-        citations = [{"doc_id": cand["doc_id"], "span_start": cand["span_start"], "span_end": cand["span_end"]}]
-        for extra in (item.get("support") or [])[:MAX_SUPPORT]:
+        citations = [cite_of(cand)]
+        for extra in (item.get("support") or [])[:MAX_SUPPORT + 1]:
             sup = by_key.get(_key_of(extra))
             if sup is None:
                 continue
-            cite = {"doc_id": sup["doc_id"], "span_start": sup["span_start"], "span_end": sup["span_end"]}
-            if cite not in citations:
+            cite = cite_of(sup)
+            if cite not in citations and len(citations) <= MAX_SUPPORT:
                 citations.append(cite)
         entities = [e for e in item.get("entities") or [] if isinstance(e, str) and e in roster]
         reason = {

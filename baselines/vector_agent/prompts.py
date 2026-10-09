@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
+from .consistency import bps_change_target
 from .evidence import Passage
 from .tables import summarize
 from .unit import Unit
@@ -91,11 +92,16 @@ value is the baseline. Otherwise use no change: zero for a change or growth targ
 stays at the table's base value), the latest observed print for a level or rate. Figures you \
 read or compute from the excerpts are signals, not the baseline. For a label about a direction \
 or an event, the baseline is the base rate: how often each label has occurred for comparable \
-cases in the history shown (a single latest observation is a noisy guide). Your forecast is \
+cases in the history shown (a single latest observation is a noisy guide). For the direction of a \
+data revision, comparable cases are routine revisions at the same stage (first to second estimate, \
+and so on); a release that revised every month at once is an annual or benchmark update and says \
+nothing about the next routine revision. Your forecast is \
 scored relative to that baseline: you gain only by being closer to the outcome.
 2. Signals. Work through the drivers the task names and what the evidence says about each: \
 trends, mean reversion, announced or scheduled information, positioning, guidance, solvency. \
-Turn them into an expected direction and size over the forecast horizon.
+Turn them into an expected direction and size over the forecast horizon. Where a COMPUTED one-step \
+backtest shows that the mean of recent rows predicted the next row better than the latest value, \
+the series mean-reverts: centre the forecast on that recent mean, then adjust for the other signals.
 3. Values in the entity table are authoritative. For a target defined as a change, growth or \
 comparison relative to a stated base (for example growth versus a prior-year value given in the \
 table), copy that base value from the table row, forecast the level of the quantity for the \
@@ -103,7 +109,11 @@ target period, then compute the change against exactly that base. The excerpts a
 other periods (for example the latest quarter versus its own prior-year quarter): never \
 substitute those values for the table's base. Forecast the level from the most recent levels of \
 the quantity (for example the latest reported quarters), not by applying a growth rate measured \
-over a different period or against a different base.
+over a different period or against a different base. First remove one-time items the filings \
+disclose (gains or losses on sales of businesses or stakes, legal or restructuring charges, special \
+assessments) from those levels. A growth rate measured for another period (for example the latest \
+quarter's year-over-year growth) is never the baseline and is never carried forward: when its \
+prior-year quarter was unusually weak or strong, the rate reflects that base, not momentum.
 4. Forecast = baseline + the expected change implied by the evidence. When the evidence points \
 one way, move by your best estimate of the size; do not shrink toward the baseline out of \
 caution. When the evidence is balanced, stay near the baseline.
@@ -113,7 +123,9 @@ this horizon: how far outcomes of this kind typically land from what is already 
 cutoff. Measure it from comparable past surprises in the evidence: for a revised estimate of an \
 already published value, the typical revision size; for a next print, the typical \
 print-to-print change; for an outcome over a horizon, the typical change over windows of that \
-length. Do not use the spread of levels across unrelated periods. When a COMPUTED summary gives the \
+length. When the evidence states how far the quantity moved over a recent window about as long as \
+the horizon, a move of that size is roughly one sigma, not a tail event. Do not use the spread of \
+levels across unrelated periods. When a COMPUTED summary gives the \
 change sd over the horizon for the series you forecast, that is the floor for sigma (convert units, \
 e.g. percentage points to basis points). For market prices, yields and spreads, \
 moves over weeks or months are much larger than daily noise: scale daily volatility by the \
@@ -186,9 +198,9 @@ def horizon_days(unit: Unit) -> int | None:
     return days if days > 0 else None
 
 
-def with_stats(text: str, horizon: int | None = None) -> str:
+def with_stats(text: str, horizon: int | None = None, bps: bool = False) -> str:
     """A whole document plus the arithmetic summary of its tables (never quotable)."""
-    stats = summarize(text, horizon)
+    stats = summarize(text, horizon, bps)
     if not stats:
         return text
     return (text.rstrip() + "\n[COMPUTED FROM THE TABLES ABOVE: arithmetic summary added for you, "
@@ -199,7 +211,7 @@ def unit_docs_full(unit: Unit) -> list[tuple[str, str, str]]:
     out = []
     for d in sorted(unit.docs.values(), key=lambda d: (d.entity_ids is not None, d.doc_id)):
         header = f"date {d.doc_date} | applies to: {_applies(unit, d.entity_ids)} | {d.title}"
-        out.append((d.doc_id, header, with_stats(d.text, horizon_days(unit))))
+        out.append((d.doc_id, header, with_stats(d.text, horizon_days(unit), bps_change_target(unit.task))))
     return out
 
 
@@ -210,7 +222,7 @@ def unit_docs_excerpts(unit: Unit, per_entity: dict[str, list[Passage]]) -> list
             d = unit.docs[p.doc_id]
             header = f"date {d.doc_date} | applies to: {_applies(unit, d.entity_ids)} | excerpt for {eid}"
             whole = p.start == 0 and p.end == len(d.text)
-            out.append((p.doc_id, header, with_stats(p.text, horizon_days(unit)) if whole else p.text))
+            out.append((p.doc_id, header, with_stats(p.text, horizon_days(unit), bps_change_target(unit.task)) if whole else p.text))
     return out
 
 
@@ -227,35 +239,65 @@ def entity_prompt(unit: Unit, entity: dict, passages: list[Passage]) -> str:
     for i, p in enumerate(passages, 1):
         d = unit.docs[p.doc_id]
         whole = p.start == 0 and p.end == len(d.text)
-        parts.append(f"[E{i}] {p.doc_id} | date {d.doc_date} | {d.title}\n{with_stats(p.text, horizon_days(unit)) if whole else p.text}")
+        parts.append(f"[E{i}] {p.doc_id} | date {d.doc_date} | {d.title}\n{with_stats(p.text, horizon_days(unit), bps_change_target(unit.task)) if whole else p.text}")
     parts.append(_METHOD)
     parts.append("Field rules:\n" + _type_rules(unit))
     parts.append(f"OUTPUT: exactly one JSON object for entity {eid}: " + _row_schema(unit, _words(1)))
     return "\n\n".join(parts)
 
 
-def reasons_prompt(unit: Unit, answers: list[dict], candidates: list[tuple[str, str, str, str]]) -> str:
-    """``candidates`` holds (key, verbatim text, doc_id, entities it applies to) premises."""
+_ROW_SKIP = {"corpus_ref", "cik", "currency"}
+
+
+def _table_row(row: dict) -> str:
+    shown = {k: v for k, v in row.items() if k not in _ROW_SKIP and isinstance(v, (str, int, float, bool))}
+    return json.dumps(shown, ensure_ascii=False)[:400]
+
+
+def reasons_prompt(unit: Unit, answers: list[dict], candidates: list[tuple[str, str, str, str]],
+                   drivers: list[str] | None = None) -> str:
+    """``candidates`` holds (key, verbatim text, doc_id, driver tag and entities it applies to)
+    premises; ``drivers`` are the drivers the task's prompt names."""
     parts = [
         "TASK\n" + str(unit.task.get("prompt", "")),
         _target_block(unit),
-        "SUBMITTED FORECASTS (one JSON object per entity)\n"
+        "ENTITY TABLE (task values given with the task; the reader does not see this table, so state any "
+        "value you rely on)\n" + "\n".join(_table_row(r) for r in unit.entities),
+        "SUBMITTED FORECASTS (one JSON object per entity; 'rationale' is the forecaster's own reasoning "
+        "behind that forecast, use it to explain the answer)\n"
         + "\n".join(json.dumps(a, ensure_ascii=False) for a in answers),
-        "CANDIDATE PREMISES (verbatim passages from the evidence)",
     ]
+    if drivers:
+        parts.append("DRIVERS THE TASK NAMES: " + "; ".join(drivers) + ".")
+    parts.append("CANDIDATE PREMISES (verbatim passages from the evidence)")
     for key, text, doc_id, applies in candidates:
-        parts.append(f"[{key}] (from {doc_id}; applies to {applies}) {text}")
+        parts.append(f"[{key}] (from {doc_id}; {applies}) {text}")
+    if drivers:
+        scope = ("Together the 3 reasons must cover EVERY driver the task names and EVERY entity: group related "
+                 "named drivers so that each reason addresses one to three of them (list them in \"driver\"), "
+                 "the first reason taking the drivers that matter most for these forecasts. A reason is about "
+                 "its drivers, not about one entity: apply them to every entity they affect. For each reason:\n"
+                 "- premise: the candidate key that states the reason's main driver most directly;\n"
+                 "- support: up to 3 other candidate keys, preferably for the reason's other drivers or for "
+                 "other entities;\n"
+                 "- mechanism (at most 80 words): how each of its drivers moves the forecast; ")
+    else:
+        scope = ("Each reason is about ONE driver: one of the most important factors behind these forecasts, "
+                 "shared by several entities where the evidence allows. Choose drivers so that together the 3 "
+                 "reasons address EVERY entity, and apply each driver to every entity it affects. For each "
+                 "reason:\n"
+                 "- premise: the candidate key that states the driver most directly;\n"
+                 "- support: up to 3 other candidate keys showing the same driver, preferably for other "
+                 "entities;\n"
+                 "- mechanism (at most 80 words): why this driver moves the forecast; ")
     parts.append(
-        "Write exactly 3 reasons (fewer only if the candidates cannot support 3), strongest first. "
-        "Each reason is about ONE driver: one of the most important factors behind these forecasts, "
-        "preferably a driver the task text names. Choose drivers so that together they explain most "
-        "of the forecasts, and let each driver cover every entity it truly affects. For each reason:\n"
-        "- premise: the candidate key that states the driver most directly;\n"
-        "- support: up to 3 other candidate keys showing the same driver, preferably for other entities;\n"
-        "- mechanism (at most 60 words): why this driver moves the forecast; use only figures stated in "
-        "the premise or support, attributed only to the entity they are about;\n"
-        "- answer_implication (at most 70 words): name each affected entity_id with its submitted label "
-        "or point forecast as shown above, and the direction this driver pushes it;\n"
+        "Write exactly 3 reasons (fewer only if the candidates cannot support 3), strongest first. " + scope
+        + "use only figures stated in the premise or support, attributed only to the entity they are about;\n"
+        "- answer_implication (at most 90 words): name each affected entity_id with its submitted label "
+        "or point forecast as shown above (with the given task value it is compared with, if any), and how "
+        "its drivers lead to that submitted value. The submitted answers are final: explain them, never "
+        "argue that one is wrong, too high or too low; a driver pulling the other way is named only "
+        "together with what outweighs it in the submitted answer;\n"
         "- entities: the affected entity_ids.\n"
         "Use plain prose; do not mention files, paths, or scoring."
     )

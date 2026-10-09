@@ -42,6 +42,45 @@ def _split_normal_cdf(x: float, centre: float, left: float, right: float) -> flo
     return 1 - 0.5 * math.erfc((x - centre) / (right * math.sqrt(2))) if right > 0 else 1.0
 
 
+def range_probabilities(samples: list[Sample], ranges: dict[str, tuple[float, float]]) -> dict[str, float]:
+    """Probability of each (lo, hi) range under the same pooled mixture as pooled_interval."""
+    comps = _components(samples)
+    total = sum(w for w, *_ in comps)
+    if not comps or total <= 0:
+        return {}
+
+    def cdf(x: float) -> float:
+        if x == math.inf:
+            return 1.0
+        if x == -math.inf:
+            return 0.0
+        return sum(w * _split_normal_cdf(x, c, a, b) for w, c, a, b in comps) / total
+
+    return {label: cdf(hi) - cdf(lo) for label, (lo, hi) in ranges.items()}
+
+
+def _components(samples: list[Sample]) -> list[tuple[float, float, float, float]]:
+    """(weight, centre, left sd, right sd) per kept sample, as pooled_interval builds them."""
+    samples = [s for s in samples if s.lo is not None and s.hi is not None and s.hi > s.lo]
+    def centre_of(s: Sample) -> float:
+        return s.point if s.point is not None and s.lo <= s.point <= s.hi else (s.lo + s.hi) / 2
+
+    if len(samples) >= 3:
+        lo_m = weighted_median([(s.lo, s.weight) for s in samples])
+        hi_m = weighted_median([(s.hi, s.weight) for s in samples])
+        width = max(hi_m - lo_m, 0.0)
+        kept = [s for s in samples if lo_m - width <= centre_of(s) <= hi_m + width]
+        if 2 * len(kept) > len(samples):
+            samples = kept
+    comps = [(s.weight, centre_of(s), (centre_of(s) - s.lo) / _Z90, (s.hi - centre_of(s)) / _Z90) for s in samples]
+    if len(comps) >= 3:
+        halves = sorted(h for _, _, a, b in comps for h in (a, b))
+        cap = 3.0 * halves[len(halves) // 2]
+        if cap > 0:
+            comps = [(w, c, min(a, cap), min(b, cap)) for w, c, a, b in comps]
+    return comps
+
+
 def pooled_interval(samples: list[Sample]) -> tuple[float, float]:
     """5th and 95th percentiles of the weighted mixture of the samples' forecast distributions.
 

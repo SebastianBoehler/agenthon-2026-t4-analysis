@@ -82,18 +82,61 @@ def _row_gap_days(rows: list[list[str]]) -> float | None:
     return (stamps[-1] - stamps[0]) / (len(stamps) - 1)  # mean spacing: weekends count for daily data
 
 
-def summarize(text: str, horizon_days: int | None = None) -> str:
+PERCENT_LEVEL = 25.0  # a column whose values all stay below this reads as a rate in percent
+
+
+def _numeric_columns(rows: list[list[str]], header: list[str]):
+    out = []
+    for j in range(1, min(len(header), _MAX_COLUMNS + 1)):
+        vals = [_num(r[j]) for r in rows]
+        series = [v for v in vals if v is not None]
+        if len(series) >= 4 and len(series) >= len(rows) // 2:
+            out.append((j, vals, series))
+    return out
+
+
+BACKTEST_WINDOW = 4
+BACKTEST_MIN = 5  # one-step forecasts needed before the comparison is reported
+
+
+def backtest(series: list[float], window: int = BACKTEST_WINDOW) -> tuple[float, float, int] | None:
+    """Mean absolute one-step error of the latest value and of the mean of the previous ``window``
+    values, over the column's own history."""
+    last, mean = [], []
+    for t in range(window, len(series)):
+        last.append(abs(series[t] - series[t - 1]))
+        mean.append(abs(series[t] - sum(series[t - window:t]) / window))
+    if len(last) < BACKTEST_MIN:
+        return None
+    return sum(last) / len(last), sum(mean) / len(mean), len(last)
+
+
+def horizon_sds(text: str, horizon_days: int | None, min_changes: int = 3) -> dict[str, tuple[float, float]]:
+    """Per dated-row column with at least ``min_changes`` steps: (random-walk sd of its change over
+    the horizon, max |value|)."""
+    out: dict[str, tuple[float, float]] = {}
+    for table in _tables(text):
+        header, rows = table[0], table[1:]
+        gap = _row_gap_days(rows)
+        steps = max(1.0, horizon_days / gap) if gap and horizon_days else None
+        if not steps or steps <= 1.5:
+            continue
+        for j, vals, series in _numeric_columns(rows, header):
+            changes = [b - a for a, b in zip(vals, vals[1:]) if a is not None and b is not None]
+            if len(changes) >= min_changes:
+                out[header[j]] = (_sd(changes) * math.sqrt(steps), max(abs(v) for v in series))
+    return out
+
+
+def summarize(text: str, horizon_days: int | None = None, bps: bool = False) -> str:
+    """``bps``: the target is in basis points, so horizon spreads of percent-level columns are
+    restated in basis points too."""
     lines: list[str] = []
     for table in _tables(text):
         header, rows = table[0], table[1:]
         gap = _row_gap_days(rows)
         steps = max(1.0, horizon_days / gap) if gap and horizon_days else None
-        numeric_cols = []
-        for j in range(1, min(len(header), _MAX_COLUMNS + 1)):
-            vals = [_num(r[j]) for r in rows]
-            series = [v for v in vals if v is not None]
-            if len(series) >= 4 and len(series) >= len(rows) // 2:
-                numeric_cols.append((j, vals, series))
+        numeric_cols = _numeric_columns(rows, header)
         for j, vals, series in numeric_cols:
             changes = [b - a for a, b in zip(vals, vals[1:]) if a is not None and b is not None]
             part = (f"'{header[j]}': n={len(series)}, last={_fmt(series[-1])}, mean={_fmt(sum(series) / len(series))}, "
@@ -102,9 +145,17 @@ def summarize(text: str, horizon_days: int | None = None) -> str:
                 mad = sum(abs(c) for c in changes) / len(changes)
                 part += (f"; row-to-row change: sd={_fmt(_sd(changes))}, mean abs={_fmt(mad)}, "
                          f"median abs={_fmt(_median([abs(c) for c in changes]))}")
+                bt = backtest(series)
+                if bt and bt[1] < bt[0]:  # reported only when it overturns the carry-forward default
+                    part += (f"; one-step backtest over {bt[2]} rows: the mean of the previous {BACKTEST_WINDOW} "
+                             f"rows (now {_fmt(sum(series[-BACKTEST_WINDOW:]) / BACKTEST_WINDOW)}) missed the next "
+                             f"row by {_fmt(bt[1])} on average, the latest value by {_fmt(bt[0])}: mean-reverting")
                 if steps and steps > 1.5:
+                    sd_h = _sd(changes) * math.sqrt(steps)
                     part += (f"; if moves were a random walk, the change over the {horizon_days}-day horizon "
-                             f"(~{steps:.0f} rows) would have sd={_fmt(_sd(changes) * math.sqrt(steps))}")
+                             f"(~{steps:.0f} rows) would have sd={_fmt(sd_h)}")
+                    if bps and max(abs(v) for v in series) < PERCENT_LEVEL:
+                        part += f" percentage points = {sd_h * 100:.3g} bps"
             lines.append(part)
         dated = [j for j in range(1, min(len(header), _MAX_COLUMNS + 1)) if _DATEISH.search(header[j])
                  and sum(_num(r[j]) is not None for r in rows) >= 2]

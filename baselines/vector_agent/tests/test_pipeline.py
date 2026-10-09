@@ -53,7 +53,8 @@ def test_every_unit_yields_a_valid_answer(unit, tmp_path):
             assert "citations" not in c and len(c["claim"]) <= 399
     for reason in answer.get("submitted_reasons", []):
         cite = reason["citations"][0]
-        assert loaded.docs[cite["doc_id"]].text[cite["span_start"]:cite["span_end"]] == reason["premise"]
+        cited = loaded.docs[cite["doc_id"]].text[cite["span_start"]:cite["span_end"]]
+        assert reason["premise"] in cited and len(cited) <= 1500 + len(reason["premise"])
 
 
 @pytest.mark.parametrize("unit_name", ["t4-macrorev-20240930-us6", "t4-credit-event-2023"])
@@ -65,18 +66,28 @@ def test_faulty_replies_are_absorbed(unit_name, tmp_path):
     assert budget.used <= 24
 
 
-def test_deadline_stops_waiting_and_fails_without_forecasts(tmp_path):
+def test_deadline_stops_waiting_and_writes_a_degraded_answer(tmp_path):
     unit = ROOT / "units" / "t4-fomc-curve-20240918"
     budget = Budget()
     chat = BudgetedChat(budget, faults={i: "slow" for i in range(30)})
     schedule = Schedule(launch_stop=0.5, hard_stop=1.0, reasons_latest=1.0, reasons_stop=1.5,
                         request_timeout=0.6)
     start = time.monotonic()
-    with pytest.raises(RuntimeError, match="no usable House forecast"):
-        run(unit / "task.json", unit / "corpus", tmp_path / "a.json", chat, budget, schedule, start,
-            log=lambda *a: None)
+    answer = run(unit / "task.json", unit / "corpus", tmp_path / "a.json", chat, budget, schedule, start,
+                 log=lambda *a: None)
     assert time.monotonic() - start < 3.0
-    assert not (tmp_path / "a.json").exists()
+    assert validate(load_unit(unit / "task.json", unit / "corpus"), answer) == []
+    assert "degraded" in answer["evidence_trace"] and "submitted_reasons" not in answer
+    assert all(r["point_forecast"] == 0.0 for r in answer["entity_predictions"])  # no change carried forward
+
+
+@pytest.mark.parametrize("unit_name", [p.name for p in UNITS])
+def test_without_any_house_every_unit_still_gets_a_valid_answer(unit_name, tmp_path):
+    unit = ROOT / "units" / unit_name
+    answer = run(unit / "task.json", unit / "corpus", tmp_path / "a.json", None, Budget(), Schedule(),
+                 time.monotonic(), log=lambda *a: None)
+    assert validate(load_unit(unit / "task.json", unit / "corpus"), answer) == []
+    assert (tmp_path / "a.json").exists() and "degraded" in answer["evidence_trace"]
 
 
 def test_parser_tolerates_common_reply_shapes():
@@ -181,6 +192,24 @@ def _synthetic_unit(tmp_path: Path, source: str, rows: int) -> Path:
     return dst
 
 
+def test_passage_index_is_not_shared_by_two_texts_under_one_doc_id(tmp_path):
+    import shutil
+    from baselines.vector_agent.evidence import entity_passages
+    src = ROOT / "units" / "t4-eps-yoy-2023Q2-mixed"
+    dst = tmp_path / "excerpt"
+    shutil.copytree(src, dst)
+    for path in (dst / "corpus").glob("EDGAR_*.json"):  # same doc ids, shorter excerpts
+        doc = json.loads(path.read_text())
+        doc["text"] = doc["text"][: len(doc["text"]) // 3]
+        path.write_text(json.dumps(doc))
+    full = load_unit(src / "task.json", src / "corpus")
+    short = load_unit(dst / "task.json", dst / "corpus")
+    for unit in (full, short):  # one process, as when a harness runs several units
+        for entity in unit.entities:
+            for p in entity_passages(unit, entity, 44_000):
+                assert p.text == unit.docs[p.doc_id].text[p.start:p.end]
+
+
 @pytest.mark.parametrize("source", ["t4-cpicomp-202410-us11", "t4-postearn-20240201-megacap"])
 def test_thirty_row_rosters_fit_the_request_budget(source, tmp_path):
     unit = _synthetic_unit(tmp_path, source, 30)
@@ -245,7 +274,9 @@ def test_driver_reasons_cite_support_and_drop_key_references():
     reply = {"reasons": [{"driver": "d", "premise": "R1", "support": ["R2", "R9"], "mechanism": "m (R2)",
                           "answer_implication": "i UST2Y", "entities": ["UST2Y"]}]}
     got = build_reasons(unit, reply, [("R1", c1), ("R2", c2)])
-    assert len(got) == 1 and len(got[0]["citations"]) == 2 and got[0]["mechanism"] == "m"
+    assert len(got) == 1 and got[0]["mechanism"] == "m"
+    cited = [doc.text[c["span_start"]:c["span_end"]] for c in got[0]["citations"]]
+    assert any(c1["claim"] in t for t in cited) and any(c2["claim"] in t for t in cited)  # same paragraph: one citation
 
 
 def test_rejected_prompt_is_retried_with_less_evidence():
@@ -255,12 +286,13 @@ def test_rejected_prompt_is_retried_with_less_evidence():
     from baselines.vector_agent.prompts import shrink_evidence
 
     class Picky:
-        def __init__(self):
+        def __init__(self, limit):
             self.lengths = []
+            self.limit = limit
 
         def complete(self, system, user, **kw):
             self.lengths.append(len(user))
-            if len(user) > 20000:
+            if len(user) > self.limit:
                 raise urllib.error.HTTPError("u", 400, "context too long", {}, io.BytesIO(b""))
             return "ok"
 
@@ -269,7 +301,7 @@ def test_rejected_prompt_is_retried_with_less_evidence():
     from baselines.vector_agent import prompts
     text = prompts.unit_prompt(unit, prompts.unit_docs_full(unit))
     assert "How to forecast:" in shrink_evidence(text, 0.5) and len(shrink_evidence(text, 0.5)) < len(text)
-    chat = Picky()
+    chat = Picky(int(0.4 * len(text)))  # the half-evidence retry is still too long, the quarter fits
     assert _call(chat, Job("unit", "g0", tuple(unit.entity_ids), text, 0.0, 1, 1000, 1.0), 60) == "ok"
     assert len(chat.lengths) >= 2 and chat.lengths[-1] < chat.lengths[0]
 
@@ -365,10 +397,10 @@ def test_reply_shapes_that_used_to_lose_an_entity():
 
 
 def test_hardening_from_the_adversarial_review(tmp_path):
-    from baselines.vector_agent.cli import _seed
+    from baselines.vector_agent.cli import PINNED_SEED
     from baselines.vector_agent.consistency import ground_growth
     from baselines.vector_agent.prompts import shrink_evidence
-    assert 0 <= _seed("deadbeef-uuid") < 2**31 and _seed("") == 20261006 and _seed("12") == 12
+    assert 0 <= PINNED_SEED < 2**31  # request seeds are a code constant, not QFBENCH_SEED
     s = _sample("A", 5.0, 1.0, 9.0)
     s.level, s.base = 1.3, None
     assert ground_growth(s, {"entity_id": "A", "trailing_growth_pct": 0.2}).point == 5.0
@@ -379,3 +411,232 @@ def test_hardening_from_the_adversarial_review(tmp_path):
     assert unit.labels == ["credit_event", "no_event"]
     unit.task["interval_level"] = "90%"
     assert unit.interval_level == 0.9
+
+
+def test_reasons_reserve_goes_to_an_entity_without_a_forecast(tmp_path):
+    unit = ROOT / "units" / "t4-postearn-20240201-megacap"
+    budget = Budget(cap=3)
+    chat = BudgetedChat(budget)
+    answer = run(unit / "task.json", unit / "corpus", tmp_path / "a.json", chat, budget, Schedule(),
+                 time.monotonic(), log=lambda *a: None)
+    assert len(answer["entity_predictions"]) == 3 and budget.used == 3
+
+
+def test_reason_candidates_start_with_the_drivers_the_task_names():
+    from baselines.vector_agent import prompts
+    from baselines.vector_agent.claims import reason_candidates
+    from baselines.vector_agent.drivers import task_drivers
+    assert task_drivers("Reason from pre-cutoff drivers - net interest income trends, credit provisions, "
+                        "and fees. Do not use the corpus.") == ["net interest income trends", "credit provisions", "fees"]
+    assert task_drivers("Forecast each row.") == []
+    unit = load_unit(ROOT / "units" / "t4-cpicomp-202410-us11" / "task.json",
+                     ROOT / "units" / "t4-cpicomp-202410-us11" / "corpus")
+    named = task_drivers(unit.task["prompt"])
+    got = reason_candidates(unit, {}, named, {})
+    tagged = [c for _, c in got if c.get("driver")]
+    assert tagged and got[0][1].get("driver") in named
+    for _, c in got:
+        assert unit.docs[c["doc_id"]].text[c["span_start"]:c["span_end"]] == c["claim"]
+    text = prompts.reasons_prompt(unit, [], [("R1", "x", "d", "applies to all entities")], named)
+    assert "DRIVERS THE TASK NAMES: " + named[0] in text
+
+
+def test_bps_change_bands_are_at_least_the_tables_horizon_spread(tmp_path):
+    from baselines.vector_agent import prompts
+    from baselines.vector_agent.consistency import change_sd_floor
+    unit_dir = ROOT / "units" / "t4-fomc-curve-20240918"
+    unit = load_unit(unit_dir / "task.json", unit_dir / "corpus")
+    floors = change_sd_floor(unit.task, unit.docs.values(), prompts.horizon_days(unit))
+    assert set(floors) == set(unit.entity_ids) and all(10 < v < 60 for v in floors.values())
+    stats = prompts.with_stats(unit.docs["RATES_SNAPSHOT_20240919"].text, prompts.horizon_days(unit), True)
+    assert "bps" in stats.split("[COMPUTED")[1]
+    answer, *_ = _run(unit_dir, tmp_path)
+    for r in answer["entity_predictions"]:
+        half = 1.6448 * floors[r["entity_id"]]
+        assert r["interval"]["lo"] <= r["point_forecast"] - half and r["interval"]["hi"] >= r["point_forecast"] + half
+    other = ROOT / "units" / "t4-auction-btc-202411-us7"
+    unit = load_unit(other / "task.json", other / "corpus")
+    assert change_sd_floor(unit.task, unit.docs.values(), prompts.horizon_days(unit)) == {}
+
+
+def test_reused_premise_falls_back_to_an_unused_support_passage():
+    from baselines.vector_agent.claims import build_reasons
+    unit = load_unit(ROOT / "units" / "t4-fomc-curve-20240918" / "task.json",
+                     ROOT / "units" / "t4-fomc-curve-20240918" / "corpus")
+    doc = unit.docs["RATES_SNAPSHOT_20240919"]
+    cands = [(f"R{i + 1}", {"doc_id": doc.doc_id, "span_start": 100 * i, "span_end": 100 * i + 60,
+                            "claim": doc.text[100 * i:100 * i + 60]}) for i in range(3)]
+    reply = {"reasons": [
+        {"premise": "R1", "support": ["R2"], "mechanism": "m1", "answer_implication": "UST2Y -5"},
+        {"premise": "R1", "support": ["R1", "R3"], "mechanism": "m2", "answer_implication": "UST10Y -5"}]}
+    got = build_reasons(unit, reply, cands)
+    assert [r["premise"] for r in got] == [cands[0][1]["claim"], cands[2][1]["claim"]]
+
+
+def test_reasons_cut_off_mid_list_are_salvaged():
+    from baselines.vector_agent.parse import salvage_objects
+    cut = ('{"reasons": [{"premise": "R1", "support": ["R2"], "mechanism": "m", "answer_implication": "i"}, '
+           '{"premise": "R3", "mechanism": "m2", "answer_implication": "i2", "entities": ["A"]')
+    assert [r["premise"] for r in salvage_objects(cut, "premise")] == ["R1", "R3"]
+    assert [r["premise"] for r in salvage_objects(cut + '}, {"premise": "R4", "mech', "premise")] == ["R1", "R3"]
+
+
+def test_reasons_still_run_after_the_extras_cutoff_while_time_remains(tmp_path):
+    unit = ROOT / "units" / "t4-fomc-curve-20240918"
+    budget = Budget()
+    chat = BudgetedChat(budget)
+    answer = run(unit / "task.json", unit / "corpus", tmp_path / "answer.json", chat, budget,
+                 Schedule(reasons_latest=0.0), time.monotonic(), log=lambda *a: None)
+    assert answer.get("submitted_reasons")
+
+
+def test_a_group_whose_calls_time_out_is_split_into_halves(tmp_path):
+    class SlowOnLargeReplies(BudgetedChat):
+        def complete(self, system, user, **kw):
+            reply = super().complete(system, user, **kw)
+            if len(json.loads(reply).get("predictions") or []) > 6:  # an 11-row reply outlasts the timeout
+                raise TimeoutError("The read operation timed out")
+            return reply
+
+    unit = ROOT / "units" / "t4-cpicomp-202410-us11"
+    budget = Budget()
+    lines: list[str] = []
+    answer = run(unit / "task.json", unit / "corpus", tmp_path / "answer.json", SlowOnLargeReplies(budget),
+                 budget, Schedule(), time.monotonic(), log=lines.append)
+    assert len(answer["entity_predictions"]) == 11
+    assert not any("degraded" in line for line in lines)
+    assert any("split into halves" in line for line in lines)
+
+
+def test_a_stalled_reasons_call_is_hedged(tmp_path):
+    import threading
+
+    class FirstReasonsStalls(BudgetedChat):
+        reason_calls = 0
+
+        def complete(self, system, user, **kw):
+            if "CANDIDATE PREMISES" in user:
+                with self.lock:
+                    self.reason_calls += 1
+                    first = self.reason_calls == 1
+                if first:  # no reply until the request gives up
+                    threading.Event().wait(min(kw["timeout"], 6.0))
+                    raise TimeoutError("The read operation timed out")
+            return super().complete(system, user, **kw)
+
+    unit = ROOT / "units" / "t4-fomc-curve-20240918"
+    budget = Budget()
+    t0 = time.monotonic()
+    answer = run(unit / "task.json", unit / "corpus", tmp_path / "answer.json", FirstReasonsStalls(budget), budget,
+                 Schedule(), t0, log=lambda *a: None)
+    assert len(answer.get("submitted_reasons", [])) == 3
+    assert time.monotonic() - t0 < 5.0  # the hedge answered; nothing waited for the stalled call
+
+
+def test_reasons_that_leave_entities_uncovered_are_retried(tmp_path):
+    class NarrowFirst(BudgetedChat):
+        reason_calls = 0
+
+        def complete(self, system, user, **kw):
+            reply = super().complete(system, user, **kw)
+            if "CANDIDATE PREMISES" in user:
+                self.reason_calls += 1
+                if self.reason_calls == 1:  # three reasons, one entity each
+                    got = json.loads(reply)["reasons"]
+                    return json.dumps({"reasons": [dict(r, entities=r["entities"][i:i + 1])
+                                                   for i, r in enumerate(got)]})
+            return reply
+
+    unit = ROOT / "units" / "t4-fomc-curve-20240918"
+    budget = Budget()
+    chat = NarrowFirst(budget)
+    answer = run(unit / "task.json", unit / "corpus", tmp_path / "answer.json", chat, budget,
+                 Schedule(), time.monotonic(), log=lambda *a: None)
+    covered = {e for r in answer["submitted_reasons"] for e in r["scope"]["entities"]}
+    assert chat.reason_calls >= 2 and covered == {r["entity_id"] for r in answer["entity_predictions"]}
+
+
+def test_large_roster_answers_fit_the_reasoning_cap_and_keep_reasons(tmp_path):
+    from baselines.vector_agent.agent import ANSWER_BYTES_CAP, _judge_view_bytes
+    unit = _synthetic_unit(tmp_path, "t4-macrorev-20240930-us6", 26)
+    answer, *_ = _run(unit, tmp_path)
+    rows = answer["entity_predictions"]
+    assert len(rows) == 26 and _judge_view_bytes(rows, "classification") <= ANSWER_BYTES_CAP
+    assert answer.get("submitted_reasons")
+    assert all(r["interval"]["lo"] <= r["point_forecast"] <= r["interval"]["hi"] for r in rows)
+
+
+def test_answer_cap_fit_moves_numbers_by_at_most_one_percent_of_the_band():
+    from baselines.vector_agent.agent import ANSWER_BYTES_CAP, _judge_view_bytes, fit_answer_cap
+    rows = [{"entity_id": f"E{i:02d}", "point_forecast": 158551.123456 + i,
+             "interval": {"level": 0.9, "lo": 158048.987654 + i, "hi": 158961.4321 + i}} for i in range(27)]
+    before = json.loads(json.dumps(rows))
+    assert _judge_view_bytes(rows, "regression") > ANSWER_BYTES_CAP
+    note = fit_answer_cap(rows, "regression")
+    assert note.startswith("numbers rounded") and _judge_view_bytes(rows, "regression") <= ANSWER_BYTES_CAP
+    for r, b in zip(rows, before):
+        width = b["interval"]["hi"] - b["interval"]["lo"]
+        assert r["interval"]["lo"] <= b["interval"]["lo"] and r["interval"]["hi"] >= b["interval"]["hi"]
+        assert abs(r["point_forecast"] - b["point_forecast"]) <= 0.01 * width
+    big = [dict(r, entity_id="X" * 90) for r in before]
+    assert fit_answer_cap(big, "regression") == "over cap" and big[0]["point_forecast"] == before[0]["point_forecast"]
+
+
+def test_reasons_arguing_against_the_submitted_answer_are_dropped():
+    from baselines.vector_agent.claims import build_reasons
+    unit = load_unit(ROOT / "units" / "t4-fomc-curve-20240918" / "task.json",
+                     ROOT / "units" / "t4-fomc-curve-20240918" / "corpus")
+    doc = unit.docs["RATES_SNAPSHOT_20240919"]
+    cands = [(f"R{i + 1}", {"doc_id": doc.doc_id, "span_start": 300 * i, "span_end": 300 * i + 60,
+                            "claim": doc.text[300 * i:300 * i + 60]}) for i in range(3)]
+    reply = {"reasons": [
+        {"premise": "R1", "mechanism": "m", "answer_implication": "UST2Y -5 bps: this conflicts with easing"},
+        {"premise": "R2", "mechanism": "m", "answer_implication": "UST10Y yields rise more than submitted"},
+        {"premise": "R3", "mechanism": "m", "answer_implication": "UST30Y +3 bps as term premium rebuilds"}]}
+    got = build_reasons(unit, reply, cands)
+    assert [r["answer_implication"] for r in got] == ["UST30Y +3 bps as term premium rebuilds"]
+
+
+def test_a_429_makes_every_worker_wait_out_the_same_backoff(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from baselines.vector_agent.house import HouseClient, HouseConfig
+
+    def refuse(request, timeout):
+        raise urllib.error.HTTPError("u", 429, "slow down", {"Retry-After": "7"}, io.BytesIO(b""))
+
+    slept = []
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr("time.sleep", lambda s: slept.append(s))
+    client = HouseClient(HouseConfig("http://h", "m", "t"), Budget())
+    with pytest.raises(urllib.error.HTTPError):
+        client.complete("s", "u", temperature=0, seed=1, max_tokens=10, timeout=100)
+    assert client._cool_until > time.monotonic() + 5  # a second worker would now wait before its attempt
+
+
+def test_schedule_follows_the_unit_card_timeout(tmp_path):
+    from baselines.vector_agent.cli import card_timeout
+    assert card_timeout(ROOT / "units" / "t4-fomc-curve-20240918" / "task.json") == 600.0
+    assert Schedule.for_unit_timeout(600.0) == Schedule() and Schedule.for_unit_timeout(None) == Schedule()
+    short = Schedule.for_unit_timeout(300.0)
+    assert short.reasons_stop == 200.0 and short.hard_stop < short.reasons_stop
+    (tmp_path / "task.json").write_text("{}")
+    assert card_timeout(tmp_path / "task.json") is None  # no card mounted: the 600 s schedule
+
+
+def test_threshold_labels_take_the_most_probable_range():
+    from baselines.vector_agent.aggregate import range_probabilities
+    from baselines.vector_agent.thresholds import label_ranges
+    task = json.loads((ROOT / "units" / "t4-postearn-20240201-megacap" / "task.json").read_text())
+    ranges = label_ranges(task)
+    assert ranges == {"positive_reaction": (1.0, float("inf")), "negative_reaction": (float("-inf"), -1.0),
+                      "flat": (-1.0, 1.0)}
+    for unit in ("t4-EXAMPLE-eps-beat", "t4-credit-event-2023", "t4-macrorev-20240930-us6"):
+        assert label_ranges(json.loads((ROOT / "units" / unit / "task.json").read_text())) is None
+    wide = [_sample("AAPL", 0.3, -5.0, 5.6, "flat") for _ in range(3)]  # point inside the flat range
+    probs = range_probabilities(wide, ranges)
+    assert max(probs, key=probs.get) == "positive_reaction" and probs["flat"] < 0.35
+    narrow = [_sample("AAPL", 0.2, -0.8, 1.2, "flat") for _ in range(3)]
+    probs = range_probabilities(narrow, ranges)
+    assert max(probs, key=probs.get) == "flat"

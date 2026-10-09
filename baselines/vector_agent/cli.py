@@ -6,15 +6,17 @@ flight after the schedule's hard stop cannot hold the container past the unit's 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 
-from .agent import Schedule, assemble, forecast, reasons
+from .agent import Planner, Schedule, Trace, assemble, fit_answer_cap, forecast, rationales, reasons
+from .degraded import degraded_forecast
 from .house import Budget, Chat, HouseClient, HouseConfig
 from .unit import Unit, load_unit, task_table_text
 
@@ -53,21 +55,45 @@ def validate(unit: Unit, answer: dict) -> list[str]:
     return problems
 
 
-def _seed(raw: str) -> int:
-    """QFBENCH_SEED in any format, as a 31-bit request seed."""
+def card_timeout(task_path: Path) -> float | None:
+    """[agent].timeout_sec from the unit's card.toml next to task.json, when the harness mounts it."""
     try:
-        value = int(raw.strip(), 0)
-    except ValueError:
-        value = int(hashlib.sha256(raw.encode()).hexdigest(), 16) if raw.strip() else 20261006
-    return value % (2**31 - 1)
+        import tomllib
+        card = tomllib.loads((task_path.parent / "card.toml").read_text(encoding="utf-8"))
+        value = float(card["agent"]["timeout_sec"])
+    except Exception:  # noqa: BLE001 - no card, or no usable timeout: keep the 600 s schedule
+        return None
+    return value if math.isfinite(value) else None
 
 
-def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat, budget: Budget,
+PINNED_SEED = 20261006
+
+
+def _plan_without_house(unit: Unit, seed: int):
+    """The planner's evidence (for claims) without any House call; a bare stand-in if even that fails."""
+    try:
+        plan = Planner(unit, seed)
+    except Exception:  # noqa: BLE001
+        plan = SimpleNamespace(trace=Trace(), samples={}, passages={}, full=True)
+    plan.trace.mode = "degraded"
+    plan.samples = defaultdict(list, plan.samples)
+    return plan
+
+
+def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat | None, budget: Budget,
         schedule: Schedule, start: float, log=print) -> dict:
     unit = load_unit(task_path, corpus_dir)
-    seed = _seed(os.environ.get("QFBENCH_SEED", ""))
-    results, plan = forecast(unit, chat, budget, start, schedule, seed)
-    missing = [eid for eid in unit.entity_ids if eid not in results]
+    # The organizers' verification rerun sets a fresh QFBENCH_SEED; a seed meant to repeat must be a
+    # constant in the code (SUBMISSION_CLI.md, determinism), so request seeds do not follow it.
+    seed = PINNED_SEED
+    results, plan = {}, None
+    if chat is not None:
+        try:
+            results, plan = forecast(unit, chat, budget, start, schedule, seed)
+        except Exception as exc:  # noqa: BLE001 - every entity then gets a degraded row below
+            log(f"forecast step failed: {type(exc).__name__}: {exc}")
+    if plan is None:
+        plan = _plan_without_house(unit, seed)
     log(f"mode={plan.trace.mode} launched={dict(plan.trace.launched)} "
         f"succeeded={dict(plan.trace.succeeded)} requests={budget.used} "
         f"elapsed={time.monotonic() - start:.1f}s")
@@ -75,13 +101,23 @@ def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat, budget: B
         log(f"  call failure: {failure}")
     for note in plan.trace.notes:
         log(f"  {note}")
+    rows_by_id = {str(e["entity_id"]): e for e in unit.entities}
+    missing = [eid for eid in unit.entity_ids if eid not in results]
+    for eid in missing:  # the organizers require an answer even without the House (README)
+        results[eid] = degraded_forecast(unit, rows_by_id[eid])
     if missing:
-        raise RuntimeError(f"no usable House forecast for {len(missing)} entities: {missing}")
+        log(f"  degraded: {len(missing)} of {len(unit.entity_ids)} entities without a House forecast")
     rows, claims_by_entity = assemble(unit, results, plan)
-    try:  # reasons are optional: nothing in them may cost the unit
-        reason_list, reason_note = reasons(unit, chat, budget, start, schedule, rows, claims_by_entity, seed)
-    except Exception as exc:  # noqa: BLE001
-        reason_list, reason_note = [], f"dropped ({type(exc).__name__})"
+    cap_note = fit_answer_cap(rows, unit.target_type)
+    if cap_note != "within cap":
+        log(f"  answer cap: {cap_note}")
+    reason_list, reason_note = [], "skipped (no House forecasts)"
+    if chat is not None and len(missing) < len(unit.entity_ids):
+        try:  # reasons are optional: nothing in them may cost the unit
+            reason_list, reason_note = reasons(unit, chat, budget, start, schedule, rows, claims_by_entity, seed,
+                                               plan.passages, rationales(unit, rows, plan.samples))
+        except Exception as exc:  # noqa: BLE001
+            reason_list, reason_note = [], f"dropped ({type(exc).__name__})"
     answer = {
         "task_id": unit.task.get("task_id", ""),
         "schema_version": str(unit.task.get("schema_version", "3")),
@@ -91,6 +127,8 @@ def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat, budget: B
             f"{plan.trace.mode}: {len(unit.docs)} admitted documents dated on or before "
             f"{unit.task.get('cutoff_date')}; {budget.used} House requests; forecasts are medians "
             f"of sampled House replies; claims quote admitted documents verbatim; reasons {reason_note}."
+            + (f" {len(missing)} of {len(unit.entity_ids)} entities had no House forecast and carry the task "
+               "table forward (degraded)." if missing else "")
         ),
         "notes": {"samples_per_entity": {eid: results[eid].samples for eid in unit.entity_ids}},
     }
@@ -98,7 +136,14 @@ def run(task_path: Path, corpus_dir: Path, out_path: Path, chat: Chat, budget: B
         answer["submitted_reasons"] = reason_list
     problems = validate(unit, answer)
     if problems:
-        raise RuntimeError("answer failed self-validation: " + "; ".join(problems[:10]))
+        log("  self-validation failed (" + "; ".join(problems[:5]) + "); writing the degraded answer")
+        results = {eid: degraded_forecast(unit, rows_by_id[eid]) for eid in unit.entity_ids}
+        rows, _ = assemble(unit, results, _plan_without_house(unit, seed))
+        answer.update(entity_predictions=rows, notes={"degraded": "self-validation failed"})
+        answer.pop("submitted_reasons", None)
+        problems = validate(unit, answer)
+        if problems:
+            raise RuntimeError("answer failed self-validation: " + "; ".join(problems[:10]))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(out_path.name + ".tmp")
     tmp.write_text(json.dumps(answer, ensure_ascii=True, indent=1) + "\n", encoding="utf-8")
@@ -117,8 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     budget = Budget()
-    chat = HouseClient(HouseConfig.from_env(), budget)
-    run(args.task, args.corpus, args.out, chat, budget, Schedule(), start)
+    try:
+        chat = HouseClient(HouseConfig.from_env(), budget)
+    except RuntimeError as exc:  # no House route: a degraded answer is still written
+        print(f"House unavailable: {exc}", file=sys.stderr)
+        chat = None
+    run(args.task, args.corpus, args.out, chat, budget, Schedule.for_unit_timeout(card_timeout(args.task)), start)
     return 0
 
 
