@@ -37,7 +37,12 @@ def ground_growth(sample: Sample, row: dict) -> Sample:
     level, base = sample.level, sample.base
     if level is None or sample.point is None:
         return sample
+    declared = _row_numbers({key: row[key] for key in
+                            ("prior_year_q_eps", "prior_year_q_revenue_musd") if key in row})
     numbers = _row_numbers(row)
+    if len(numbers) > 1 and declared and (len(declared) != 1 or (base is not None and
+                    abs(base - declared[0]) > 1e-6 * max(1.0, abs(declared[0])))):
+        return sample  # another quarter's numeric value is not the declared growth base
     if base is None or not any(abs(base - v) <= 1e-6 * max(1.0, abs(v)) for v in numbers):
         if len(numbers) != 1:
             return sample  # no unambiguous table base: leave the sample as the model gave it
