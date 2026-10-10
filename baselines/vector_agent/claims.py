@@ -34,9 +34,8 @@ def _segments_of(text: str) -> tuple[tuple[int, int], ...]:
 
 def _enclosing(doc: Doc, start: int, end: int) -> tuple[int, int]:
     for s, e in _segments_of(doc.text):
-        if s <= start < e:
-            if end <= e or e - s >= 200:
-                return s, e
+        if s <= start < end <= e:
+            return s, e
     return start, end
 
 
@@ -52,7 +51,10 @@ def locate(doc: Doc, quote: str) -> tuple[int, int] | None:
     pattern = r"\s+".join(re.escape(w) for w in words)
     m = re.search(pattern, unicodedata.normalize("NFKC", doc.text)) if len(pattern) < 4000 else None
     if m and len(unicodedata.normalize("NFKC", doc.text)) == len(doc.text):
-        return m.start(), m.end()
+        # Equal total lengths do not guarantee unchanged offsets inside the document.
+        original = unicodedata.normalize("NFKC", doc.text[m.start():m.end()])
+        if re.fullmatch(pattern, original):
+            return m.start(), m.end()
     return None
 
 

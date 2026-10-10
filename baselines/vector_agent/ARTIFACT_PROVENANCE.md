@@ -156,3 +156,14 @@ on conditional uncertainty. This revision clarifies that assumption and the
 organizer's Final-cutoff eligibility ruling; forecast math and constants are unchanged.
 Synthetic interval-score comparisons remain diagnostic-only and do not select
 Final behavior or establish that actual House intervals are justified.
+
+Quotation extraction now preserves the complete matched quotation when a segment
+boundary crosses it. Normalized matches also validate the original source slice:
+equal total Unicode-normalized document lengths can conceal shifted local offsets.
+Invented controls reproduced both errors through the actual quote helpers; native
+planning, parsing and assembly reproduced quotation-tail loss despite passing
+structural checks. The Unicode fixture's enclosing context masked its helper error.
+Selection uses quotation fidelity and original-coordinate correctness, without
+outcomes or performance scores. Repeated quotations remain ambiguous; document-ID
+fallback and occurrence order are unchanged. Production frequency, NLI effects and
+forecast gains remain unmeasured. This source change does not publish a new image.
