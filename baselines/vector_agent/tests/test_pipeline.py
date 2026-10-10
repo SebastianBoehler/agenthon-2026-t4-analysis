@@ -640,3 +640,19 @@ def test_threshold_labels_take_the_most_probable_range():
     narrow = [_sample("AAPL", 0.2, -0.8, 1.2, "flat") for _ in range(3)]
     probs = range_probabilities(narrow, ranges)
     assert max(probs, key=probs.get) == "flat"
+
+
+def test_ready_entities_stop_waiting_for_stragglers_at_reasons_latest(tmp_path):
+    # Three fast forecasts cover every entity; the other first-wave calls hang. Collection must
+    # end at reasons_latest, not hard_stop, so the reasons call still has its window.
+    unit = ROOT / "units" / "t4-cpicomp-202410-us11"
+    budget = Budget()
+    chat = BudgetedChat(budget, faults={i: "slow" for i in range(3, 30)})
+    schedule = Schedule(launch_stop=0.2, extras_stop=0.2, max_launch=0.2, hard_stop=6.0,
+                        reasons_latest=1.0, reasons_stop=8.0, request_timeout=5.0)
+    from baselines.vector_agent.agent import forecast
+    start = time.monotonic()
+    results, plan = forecast(load_unit(unit / "task.json", unit / "corpus"), chat, budget, start, schedule)
+    elapsed = time.monotonic() - start
+    assert 1.0 <= elapsed < 2.5
+    assert all(len(plan.samples[eid]) >= 3 for eid in plan.ids) and len(results) == len(plan.ids)

@@ -199,3 +199,13 @@ Development score selected the value.
 The multiplier applies after the corpus volatility floor. Probability and
 pure-label placeholder bands are unchanged. Transfer to unseen Final families
 is assumed from the general overconfidence of sampled model intervals, not shown.
+
+## Request concurrency and reasons window (10 October 2026)
+
+Resource grounds only; no outcomes or scores. With the hosted stand-in, single
+full-context calls took 70 to 280 s, so four workers used 6 to 14 of the 25
+admitted requests. A paired run of six units with eight workers raised
+forecasts per entity in every unit, with fewer failed calls and all units
+finishing in time. In the same runs a slow last forecast wave ended near 434 s
+and the macro-revision unit lost its reasons; forecast collection now stops at
+the existing reasons_latest time once every entity has three forecasts.

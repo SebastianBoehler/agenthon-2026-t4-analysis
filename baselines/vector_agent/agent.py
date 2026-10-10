@@ -50,6 +50,7 @@ REASONS_MIN_WINDOW = 30.0  # seconds before reasons_stop: a late reasons call st
 BAND_SCALE = 2.3
 YIELD_BAND_SCALE = 2.3
 CLASS_BAND_SCALE = 2.3
+READY_SAMPLES = 3  # forecasts per entity after which the reasons window takes priority
 COVER_MIN_WINDOW = 60.0  # seconds before hard_stop in which a call for an uncovered entity still launches
 ANSWER_BYTES_CAP = 2900  # the reasoning grader reads at most 3000 bytes of per-entity answers
 MAX_FULL_GROUPS = 16
@@ -71,7 +72,7 @@ class Schedule:
     reasons_latest: float = 390.0
     reasons_stop: float = 500.0
     request_timeout: float = 240.0
-    workers: int = 4
+    workers: int = 8  # a slow House otherwise leaves most of the 25 admitted requests unused
     extras_stop: float = 200.0  # extras before any latency is observed
 
     @classmethod
@@ -408,6 +409,11 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
     try:
         while True:
             now = time.monotonic() - start
+            # With every entity at READY_SAMPLES, stragglers past reasons_latest would eat the
+            # reasons window (a slow last wave can end after 430 s); stop collecting there.
+            ready = all(len(plan.samples[eid]) >= READY_SAMPLES for eid in plan.ids)
+            if ready and now >= schedule.reasons_latest:
+                break
             workers = 2 if getattr(chat, "rate_limited", 0) else schedule.workers  # back off once throttled
             if durations:
                 p75 = sorted(durations)[int(0.75 * (len(durations) - 1))]
@@ -436,9 +442,11 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
                 pending[fut], launched_at[fut] = job, now
             if not pending:
                 break
-            done, _ = wait(pending, timeout=max(0.05, schedule.hard_stop - now),
-                           return_when=FIRST_COMPLETED)
+            stop = schedule.reasons_latest if ready else schedule.hard_stop
+            done, _ = wait(pending, timeout=max(0.05, stop - now), return_when=FIRST_COMPLETED)
             if not done:
+                if ready:
+                    continue
                 break
             for fut in done:
                 job = pending.pop(fut)

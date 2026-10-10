@@ -41,8 +41,8 @@ There is one user-approved recovery exception. An entity with no House reply aft
 - **Oversized prompts.** A prompt rejected with HTTP 400 is retried with half, then a quarter, of its evidence.
 - **Budget.**
   - At most 24 requests per unit; thinking is disabled.
-  - Four forecast workers; up to two reasons calls can run concurrently.
-  - For a 600-second card, ordinary forecast launches stop by 400 seconds and forecast collection stops by 460 seconds. Coverage attempts can override ordinary launch timing. Extra samples target completion before 390 seconds. Reasons use the remaining window through 500 seconds; their start is not guaranteed by 390 seconds.
+  - Eight forecast workers (two after a rate limit); up to two reasons calls can run concurrently.
+  - For a 600-second card, ordinary forecast launches stop by 400 seconds and forecast collection stops by 460 seconds. Coverage attempts can override ordinary launch timing. Extra samples target completion before 390 seconds. Once every entity has three forecasts, collection stops at 390 seconds and calls still in flight are abandoned, so a slow last wave cannot consume the reasons window. Reasons use the remaining window through 500 seconds; their start is not guaranteed by 390 seconds.
   - Deadlines scale from a supported mounted card timeout. These defaults do not establish the unpublished Final resource limits.
   - The answer is written atomically and the process then exits at once.
 
