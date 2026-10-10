@@ -6,6 +6,7 @@ from datetime import date
 
 from .consistency import bps_change_target
 from .evidence import Passage
+from .growth_contract import forecast_method, report_comparative_target
 from .tables import summarize
 from .unit import Unit
 
@@ -148,13 +149,18 @@ def _words(n_requested: int) -> int:
 
 
 def _row_schema(unit: Unit, words: int) -> str:
+    report_base = report_comparative_target(unit.task)
+    base_analysis = ("forecasted resolving-report comparative" if report_base else
+                     "base value copied from the table if the target is relative to one")
+    base_rule = ("your forecast of the comparative as printed in the resolving report, using only pre-cutoff evidence"
+                 if report_base else "that base value copied exactly from the table row")
     fields = [
         '"entity_id": "<id>"',
-        f'"analysis": "<at most {words} words: target quantity and units, base value copied from the table if the target is relative to one, baseline, key signals, expected level and change, typical move size>"',
+        f'"analysis": "<at most {words} words: target quantity and units, {base_analysis}, baseline, key signals, expected level and change, typical move size>"',
         '"baseline": <number or null>',
         '"point_forecast": <number>',
         '"level_forecast": <number or null: for a target that is a change or growth relative to a base value, your forecast of the underlying level for the target period>',
-        '"base_value": <number or null: that base value copied exactly from the table row>',
+        f'"base_value": <number or null: {base_rule}>',
         '"sigma": <number>',
         '"lo": <number>',
         '"hi": <number>',
@@ -177,7 +183,7 @@ def unit_prompt(unit: Unit, docs_text: list[tuple[str, str, str]], focus: list[s
     ]
     for doc_id, header, text in docs_text:
         parts.append(f"=== {doc_id} | {header} ===\n{text}")
-    parts.append(_METHOD)
+    parts.append(forecast_method(_METHOD, unit.task))
     parts.append("Field rules:\n" + _type_rules(unit))
     if focus:
         parts.append("FORECAST ONLY THESE ENTITIES (the rest of the table is context): " + ", ".join(focus))
@@ -240,7 +246,7 @@ def entity_prompt(unit: Unit, entity: dict, passages: list[Passage]) -> str:
         d = unit.docs[p.doc_id]
         whole = p.start == 0 and p.end == len(d.text)
         parts.append(f"[E{i}] {p.doc_id} | date {d.doc_date} | {d.title}\n{with_stats(p.text, horizon_days(unit), bps_change_target(unit.task)) if whole else p.text}")
-    parts.append(_METHOD)
+    parts.append(forecast_method(_METHOD, unit.task))
     parts.append("Field rules:\n" + _type_rules(unit))
     parts.append(f"OUTPUT: exactly one JSON object for entity {eid}: " + _row_schema(unit, _words(1)))
     return "\n\n".join(parts)

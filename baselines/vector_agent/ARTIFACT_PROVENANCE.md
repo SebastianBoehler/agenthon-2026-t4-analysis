@@ -37,8 +37,9 @@ retrospectively renamed diagnostic-only. The organizer requires no signoff.
   entity roster and admitted corpus. No participant model or adapter is bundled.
 - Evidence timestamps, document identities and entity admission come from the
   mounted manifest. Runtime evidence must satisfy the unit's actual cutoff gates.
-- Sample points, labels and intervals come from runtime model responses. Growth
-  arithmetic uses declared bases in the task table. The band floor uses dated
+- Sample points, labels and intervals come from runtime model responses. Fixed-base
+  growth arithmetic uses declared bases in the task table. An explicitly recognized
+  report-comparative contract keeps the model's target-unit prediction. The band floor uses dated
   corpus histories; neither mechanism reads realized target outcomes.
 - Historical research used a separately hosted Nemotron 3 Super proxy. Its
   provider, quantization, timing and reasoning are not confirmed House parity.
@@ -84,6 +85,26 @@ scheduling and parsing controls remain relevant. Passing them establishes code
 behavior, not official prediction performance or unseen-family transfer.
 
 ## Measurement and outstanding qualification
+
+An arithmetic correction starts from `4d4ad991fffb2f3a1e1c62a20416924c83be2991`.
+Invented finite inputs reproduced an interval overflow through the actual parser,
+growth correction, sample admission and aggregation. Published 5.3 numeric
+alignment rejects the resulting infinity. Correction now computes all candidate
+fields before mutation and leaves the original sample intact if any result is
+nonfinite. This preserves ordinary correction and the existing base/ratio policies.
+Selection uses synthetic correctness, without outcomes, saved replies or scores.
+It does not establish overflow frequency or protect every arithmetic operation.
+
+A separate source-contract correction distinguishes a fixed table denominator
+from a comparative printed in the future resolving report. A shared recognizer
+covers the explicit both-figures-as-printed clause, with case and whitespace
+normalization; it is not a general free-text formula parser. For that contract,
+instructions forecast both operands from pre-cutoff evidence and fixed-table
+normalization is disabled. The given comparative remains an anchor, without
+assuming an observed restatement. Other prompt and normalization policies remain.
+Task definitions and invented production-path controls select this correction;
+no resolving values, model replies, outcomes or performance scores were used.
+Negative-base conventions and unrecognized paraphrases remain limitations.
 
 The reasons correction starts from `a017121b45344c2c9ca04b7d0bd9d895d8e4b67e`.
 Synthetic controls reproduce three defects with the published 5.3 advisory rail:

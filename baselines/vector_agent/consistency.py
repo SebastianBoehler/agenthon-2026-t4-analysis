@@ -10,6 +10,7 @@ import math
 import re
 
 from .parse import Sample
+from .growth_contract import report_comparative_target
 from .tables import PERCENT_LEVEL, horizon_sds
 
 _GROWTH = re.compile(r"growth|yoy", re.IGNORECASE)
@@ -17,10 +18,12 @@ _PERCENT = re.compile(r"pct|percent", re.IGNORECASE)
 
 
 def percent_growth_target(task: dict) -> bool:
+    """Whether growth can be normalized against a table base, excluding a report comparative."""
     target = task.get("target") or {}
     name = str(target.get("name", ""))
     prompt = str(task.get("prompt", ""))
-    return (target.get("type") == "regression" and bool(_GROWTH.search(name))
+    return (not report_comparative_target(task)
+            and target.get("type") == "regression" and bool(_GROWTH.search(name))
             and bool(_PERCENT.search(name) or re.search(r"as a percent", prompt, re.IGNORECASE)))
 
 
@@ -53,10 +56,12 @@ def ground_growth(sample: Sample, row: dict) -> Sample:
     shift = growth - sample.point
     if abs(shift) < 1e-9:
         return sample
-    sample.point = growth
+    lo, hi = sample.lo, sample.hi
     if sample.lo is not None and sample.hi is not None:
-        sample.lo += shift
-        sample.hi += shift
+        lo, hi = sample.lo + shift, sample.hi + shift
+    if not all(math.isfinite(value) for value in (growth, shift, lo, hi) if value is not None):
+        return sample  # decline the entire correction rather than create a nonfinite interval
+    sample.point, sample.lo, sample.hi = growth, lo, hi
     return sample
 
 
