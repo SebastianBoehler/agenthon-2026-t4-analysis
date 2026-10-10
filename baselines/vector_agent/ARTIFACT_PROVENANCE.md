@@ -209,3 +209,14 @@ forecasts per entity in every unit, with fewer failed calls and all units
 finishing in time. In the same runs a slow last forecast wave ended near 434 s
 and the macro-revision unit lost its reasons; forecast collection now stops at
 the existing reasons_latest time once every entity has three forecasts.
+
+## Revision-direction labels (10 October 2026)
+
+Practice-unit exception (issue #24), macro-revision unit only, outcomes from
+ALFRED first-release vintages retrieved 7 October 2026. The rule and its bar were
+fixed in the 7 October practice plan before outcomes were collected: a rule that
+applies to any revision table is adopted only if it beats the House labels by at
+least 2 of 12 in every run. Same-stage vintage majority scored 7 of 12; the House
+labels scored 4 or 5 of 12 in each of six fresh runs. The last-revision rule
+scored 6 of 12 and was not adopted. Evidence is one unit of twelve rows; points
+and intervals are unchanged.

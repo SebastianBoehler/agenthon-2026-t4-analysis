@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 
 from . import prompts
 from .aggregate import _Z90, Forecast, _round, combine, range_probabilities
+from .revisions import revision_labels
 from .consistency import bps_change_target, change_sd_floor, ground_growth, percent_growth_target
 from .drivers import task_drivers
 from .thresholds import label_ranges
@@ -497,6 +498,14 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
         note = cohort.relabel(results, plan.samples, plan.event[0], plan.event[1], plan.cohort_counts,
                               plan.cohort_rankings, bounded)
         plan.trace.notes.append(note)
+    history = revision_labels(unit)
+    if history:
+        changed = sum(results[eid].label != label for eid, label in history.items() if eid in results)
+        for eid, label in history.items():
+            if eid in results:
+                results[eid] = replace(results[eid], label=label)
+        plan.trace.notes.append(f"revision labels: same-stage vintage majority for {len(history)} "
+                                f"entities, {changed} label(s) changed")
     return results, plan
 
 
