@@ -1,18 +1,19 @@
 ## Executive summary
 
-This record accompanies the vector-agent build source. Later on 10 October 2026
-the three global interval multipliers were set to one value, 2.3, under the
-organizer's practice-unit exception (see "Practice-unit band multiplier" below).
-An earlier revision the same day had set them to identity (1.0); that state is
-superseded and its history is kept below.
+This record accompanies the vector-agent build source. The active forecast constants and
+the route that selected each one:
 
-Optional reasons also use the published Unicode detection, content-duplicate and
-URI evidence-masking checks. Those corrections address reproduced contract failures;
-their selection does not use outcome scores or proxy-judge quality.
+| Constant or rule | Value | Selection route |
+|---|---|---|
+| Numeric band multiplier (`BAND_SCALE`, `YIELD_BAND_SCALE`, `CLASS_BAND_SCALE`) | 2.3 | Practice-unit exception, frozen rule, 10 October ("Practice-unit band multiplier" below) |
+| Revision-direction labels (`revisions.py`) | same-stage vintage majority | Practice-unit exception, bar fixed 7 October ("Revision-direction labels" below) |
+| Forecast workers / reasons window | 8 workers; collection stops at reasons_latest once every entity has 3 samples | Resource grounds ("Request concurrency" below) |
+| Growth recompute, report-comparative contract, entity identity, volatility scoping, quotation fidelity, reasons text rules | as documented | Code correctness on synthetic controls (sections below) |
+| Rejected on practice outcomes (negative evidence, not vetoes) | thinking mode; latest-level baseline prompt; shrinking points toward the naive point; per-sample pooling and band-outlier alternatives | Private study files (dated plans and results) |
 
-The earlier candidate had private-outcome-informed choices. Those choices and
-their research history remain disclosed below. This source checkpoint is not a
-new image, submission, verified production score or complete Final qualification.
+Every practice-based choice names its units, outcome sources and retrieval dates in its
+section. Private research scores and Development scores never select Final code. Earlier
+revisions of this file (identity multipliers, then 2.3) are kept below as dated history.
 
 ## Authority and cutoff treatment
 
@@ -220,3 +221,26 @@ least 2 of 12 in every run. Same-stage vintage majority scored 7 of 12; the Hous
 labels scored 4 or 5 of 12 in each of six fresh runs. The last-revision rule
 scored 6 of 12 and was not adopted. Evidence is one unit of twelve rows; points
 and intervals are unchanged.
+
+## Growth-sample plausibility filter (10 October 2026, 23:08 UTC)
+
+Route: the organizer's practice-unit exception (issue #24), bank EPS growth unit only,
+outcomes from originally filed SEC 8-K/10-Q figures retrieved 7 October 2026. The rule,
+its bar and its alternatives were written down (private plan file) before the runs.
+
+- Defect reproduced in saved replies: for a percent-growth target some samples set the
+  level forecast to the base times another period's growth (GS: 5.47 x 2.79 = 15.27
+  while the latest reported quarter is 8.62), so a cluster of such samples sets the
+  pooled median.
+- Mechanism: percent-growth prompts also request `latest_level`, the latest reported
+  level of the quantity. Per entity, a sample whose level forecast lies outside
+  [1/R, R] times the median of its `latest_level` replies is dropped before pooling;
+  samples without a level or without a reference are kept, and if every sample would
+  be dropped all are kept. Other targets' prompts are unchanged.
+- Bar: adopt the smallest R in {1.5, 1.75, 2.0} that lowers the unit's growth MAE by at
+  least 25% against the saved-run mean (17.2 over four runs) on two fresh runs.
+- Result: R = 1.5 gives 10.6 (-38%; the two runs 9.6 and 11.6; unfiltered 9.4 and 18.8),
+  R = 1.75 gives 13.6 (-21%, fails), R = 2.0 gives 17.2 (fails). Adopted R = 1.5.
+- Limits: evidence is one unit of eight rows; two entities stay far from their outcomes
+  in every sample because the model does not strip one-time items. Transfer to other
+  growth families (revenue growth, other quarters) is assumed from the mechanism, not shown.

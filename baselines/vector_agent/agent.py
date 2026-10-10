@@ -18,7 +18,8 @@ from dataclasses import dataclass, field, replace
 from . import prompts
 from .aggregate import _Z90, Forecast, _round, combine, range_probabilities
 from .revisions import revision_labels
-from .consistency import bps_change_target, change_sd_floor, ground_growth, percent_growth_target
+from .consistency import (bps_change_target, change_sd_floor, ground_growth, percent_growth_target,
+                          plausible_growth_samples)
 from .drivers import task_drivers
 from .thresholds import label_ranges
 from . import cohort
@@ -462,6 +463,13 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
     results = {}
+    if plan.growth:
+        dropped = 0
+        for eid in plan.ids:
+            kept = plausible_growth_samples(plan.samples[eid])
+            dropped += len(plan.samples[eid]) - len(kept)
+            plan.samples[eid] = kept
+        plan.trace.notes.append(f"growth plausibility: {dropped} sample(s) dropped against the latest reported level")
     bounded = _probability_target(unit, plan.samples)
     floors = change_sd_floor(unit.task, unit.docs.values(), prompts.horizon_days(unit))
     bps_target = bps_change_target(unit.task)

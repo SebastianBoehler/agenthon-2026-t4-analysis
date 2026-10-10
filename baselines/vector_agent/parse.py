@@ -31,6 +31,7 @@ class Sample:
     sigma: float | None = None
     level: float | None = None
     base: float | None = None
+    latest: float | None = None  # most recent reported level of the quantity, as the model read it
     quotes: list[tuple[str, str]] = field(default_factory=list)  # (doc_id, quote)
     weight: float = 1.0
     source: str = ""
@@ -204,6 +205,7 @@ def to_sample(item: dict, *, target_type: str, labels: list[str], entity_ids: se
         baseline=number(item.get("baseline")), analysis=str(item.get("analysis") or "")[:1200],
         quotes=_quotes(item), weight=weight, source=source, sigma=sigma,
         level=number(item.get("level_forecast")), base=number(item.get("base_value")),
+        latest=number(item.get("latest_level")),
     )
 
 

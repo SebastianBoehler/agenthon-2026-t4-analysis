@@ -98,3 +98,23 @@ def change_sd_floor(task: dict, docs, horizon_days: int | None) -> dict[str, flo
                 out[str(row["entity_id"])] = hit[0] * 100.0
                 break
     return out
+
+
+LEVEL_RATIO_MAX = 1.5  # a forecast level beyond this ratio to the latest reported level is implausible
+
+
+def plausible_growth_samples(samples: list[Sample], ratio: float = LEVEL_RATIO_MAX) -> list[Sample]:
+    """Drop growth samples whose level forecast is implausible against the latest reported level.
+
+    Reproduced defect: for a growth target, a sample sets level_forecast = base x (1 + another
+    period's growth), e.g. 5.47 x 2.79 = 15.27 when the latest reported quarter is 8.62. The
+    reference is the median of the entity's own ``latest_level`` replies; a sample whose level is
+    more than ``ratio`` times above or below it is dropped. Samples without a level or without a
+    usable reference are kept, and if every sample would be dropped all are kept.
+    """
+    refs = sorted(s.latest for s in samples if s.latest is not None and math.isfinite(s.latest) and s.latest > 0)
+    if not refs:
+        return samples
+    ref = refs[len(refs) // 2] if len(refs) % 2 else (refs[len(refs) // 2 - 1] + refs[len(refs) // 2]) / 2
+    kept = [s for s in samples if s.level is None or s.level <= 0 or 1.0 / ratio <= s.level / ref <= ratio]
+    return kept or samples

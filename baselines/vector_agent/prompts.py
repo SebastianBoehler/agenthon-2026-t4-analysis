@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from .consistency import bps_change_target
+from .consistency import bps_change_target, percent_growth_target
 from .evidence import Passage
 from .growth_contract import forecast_method, report_comparative_target
 from .tables import summarize
@@ -161,6 +161,11 @@ def _row_schema(unit: Unit, words: int) -> str:
         '"point_forecast": <number>',
         '"level_forecast": <number or null: for a target that is a change or growth relative to a base value, your forecast of the underlying level for the target period>',
         f'"base_value": <number or null: {base_rule}>',
+    ]
+    if percent_growth_target(unit.task):
+        fields.append('"latest_level": <number or null: the most recently reported level of the same quantity '
+                      'before the cutoff (for example the latest quarter\'s diluted EPS), as printed, with no growth applied>')
+    fields += [
         '"sigma": <number>',
         '"lo": <number>',
         '"hi": <number>',

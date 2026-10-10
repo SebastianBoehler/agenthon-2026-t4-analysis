@@ -14,6 +14,10 @@ Use the published analyze verb, schema, exact entity roster and target types cla
 
 Every new Markdown document opens with an executive summary. Link authoritative artifacts instead of copying long field lists and formulas. Remove obsolete active instructions; preserve dated historical evidence with an explicit superseded label. Do not install fallback models, fabricate answers or add speculative configuration. The one user-approved exception is degraded recovery: an entity with no House forecast after every attempt gets the declared carry-forward row from `baselines/vector_agent/degraded.py`, and the answer's evidence_trace says so.
 
+## Scoring facts that shape decisions (organizer statements, 10 October 2026)
+
+Per unit: composite = 0.7 x predictive quality + 0.3 x min(raw interval quality, max(0.5, predictive quality)), times the false-claim factor. Regression quality is naive_MAE / (naive_MAE + MAE); classification and ranking are anchored so the declared naive rule scores 0.5. Each unit's naive rule is a mechanical per-unit rule written before its answer was computed and is deliberately unpublished ([issue #25](https://github.com/Agenthon-2026/track4-analysis-public/issues/25)); only the regression carry-forward is documented. In Development the macro-revision practice unit has no numeric truth, so its composite is the anchored label accuracy alone. Final = -0.27 + 1.27 x analysis + 0.25 x reasoning; the reasoning bonus is graded offline in the Final only. Final per-unit limits are to be published per track before 13 October; reconfirm them before the Final freeze.
+
 ## Participant gates
 
 Keep meaningful correctness, schema/data integrity, public-safety, provenance, quota/resource and owned-job checks. Mock parity, universal no-unit-regression, a particular retrieval/quote policy, arbitrary variant/sample counts and proof of a hypothesis before testing are not organizer rules. Treat tradeoffs and uncertain local measurements as diagnostics. Freeze actual comparison/stop rules before observing results; historical negative results do not ban a method family.
