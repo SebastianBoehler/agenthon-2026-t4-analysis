@@ -83,12 +83,14 @@ def change_sd_floor(task: dict, docs, horizon_days: int | None) -> dict[str, flo
     A model-stated band narrower than this ignores the evidence's own volatility."""
     if not bps_change_target(task) or not horizon_days:
         return {}
-    spreads: dict[str, tuple[float, float]] = {}
-    for doc in docs:
-        for column, value in horizon_sds(doc.text, horizon_days, FLOOR_MIN_CHANGES).items():
-            spreads.setdefault(column, value)
+    histories = [(doc, horizon_sds(doc.text, horizon_days, FLOOR_MIN_CHANGES)) for doc in docs]
     out: dict[str, float] = {}
     for row in task.get("entities") or []:
+        spreads: dict[str, tuple[float, float]] = {}
+        for doc, history in histories:
+            if doc.admits(str(row["entity_id"])):
+                for column, value in history.items():
+                    spreads.setdefault(column, value)
         for value in row.values():
             hit = spreads.get(str(value)) if isinstance(value, str) else None
             if hit and hit[1] < PERCENT_LEVEL and hit[0] > 0:

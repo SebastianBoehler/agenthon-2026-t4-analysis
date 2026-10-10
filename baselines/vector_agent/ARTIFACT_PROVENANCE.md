@@ -113,6 +113,17 @@ ID matching remains. Invented parser and actual Planner-job controls select this
 correction without saved replies, outcomes or scores. Its production frequency
 and predictive effect remain unmeasured; earlier frozen images are unchanged.
 
+An entity-specific volatility floor uses histories from documents admitted for
+that entity, retaining shared histories and the first matching eligible column.
+Invented histories reproduced a different entity's same-named column setting the
+floor, with document order changing both bands tenfold. The correction associates
+each row with its own admitted history; it changes no statistic or constant.
+This is operand identity correctness, not a prohibition on cross-entity reasoning.
+Unchanged public input-only checks covered eleven units and changed no floor.
+No outcomes, model calls or quality scores selected this correction. Its unseen
+frequency, predictive effect and runtime cost remain unmeasured. Earlier frozen
+images and negative controls remain historical evidence.
+
 The reasons correction starts from `a017121b45344c2c9ca04b7d0bd9d895d8e4b67e`.
 Synthetic controls reproduce three defects with the published 5.3 advisory rail:
 an invisible-character deny-list bypass, normalized content duplicates, and cited
