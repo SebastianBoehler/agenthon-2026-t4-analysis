@@ -80,7 +80,8 @@ def bps_change_target(task: dict) -> bool:
 def change_sd_floor(task: dict, docs, horizon_days: int | None) -> dict[str, float]:
     """For a basis-point change target whose table row names a percent-level table column (a
     yield series id, say), the random-walk sd of that column's change over the horizon, in bps.
-    A model-stated band narrower than this ignores the evidence's own volatility."""
+    This participant regularizer assumes random-walk moves; it is not a lower bound
+    on conditional uncertainty, which can be smaller when levels revert."""
     if not bps_change_target(task) or not horizon_days:
         return {}
     histories = [(doc, horizon_sds(doc.text, horizon_days, FLOOR_MIN_CHANGES)) for doc in docs]

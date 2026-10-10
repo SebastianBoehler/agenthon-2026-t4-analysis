@@ -149,3 +149,10 @@ No completed prediction comparison measures this identity correction. Private
 research scores will not decide its retention.
 Every CodaBench upload still requires the user's separate candidate-specific
 approval; registry publication has its own permission boundary.
+
+The history-based interval floor remains a participant random-walk regularizer.
+Known Gaussian process controls disprove treating it as a universal lower bound
+on conditional uncertainty. This revision clarifies that assumption and the
+organizer's Final-cutoff eligibility ruling; forecast math and constants are unchanged.
+Synthetic interval-score comparisons remain diagnostic-only and do not select
+Final behavior or establish that actual House intervals are justified.
