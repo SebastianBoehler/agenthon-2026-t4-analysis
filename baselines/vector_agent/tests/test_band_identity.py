@@ -35,11 +35,33 @@ def prepared_plan(kind="regression", name="native_level", point=10, lo=8, hi=13)
     return unit, plan
 
 
-def finish(unit, plan, monkeypatch):
+def finish(unit, plan, monkeypatch, scale=1.0):
     # Synthetic accepted samples; expired launch deadline prevents every model call.
     monkeypatch.setattr(agent, "Planner", lambda unit, seed: plan)
+    for name in ("BAND_SCALE", "YIELD_BAND_SCALE", "CLASS_BAND_SCALE"):
+        monkeypatch.setattr(agent, name, scale)
     results, _ = agent.forecast(unit, None, Budget(), time.monotonic(), STOPPED)
     return results["A"]
+
+
+@pytest.mark.parametrize("kind,name", [("regression", "native_level"),
+    ("ranking", "native_level"), ("regression", "yield_change_bps"),
+    ("classification", "eps_yoy_direction")])
+def test_global_scale_widens_numeric_bands_about_the_point(kind, name, monkeypatch):
+    unit, plan = prepared_plan(kind, name)
+    result = finish(unit, plan, monkeypatch, scale=agent.BAND_SCALE)
+    assert agent.BAND_SCALE == agent.YIELD_BAND_SCALE == agent.CLASS_BAND_SCALE == 2.3
+    assert result.point == 10
+    assert result.lo == pytest.approx(10 - 2.3 * 2) and result.hi == pytest.approx(10 + 2.3 * 3)
+
+
+@pytest.mark.parametrize("point,lo,hi,probability", [(.7, 0, 1, False), (.7, .5, .9, True)])
+def test_global_scale_leaves_placeholder_and_probability_bands(point, lo, hi, probability, monkeypatch):
+    unit, plan = prepared_plan("classification", "synthetic_quantity", point, lo, hi)
+    if probability:
+        unit.task["prompt"] = "Forecast the probability of the event."
+    expected = combine(plan.samples["A"], "classification", unit_interval=probability)
+    assert finish(unit, plan, monkeypatch, scale=agent.BAND_SCALE) == expected
 
 
 @pytest.mark.parametrize("kind,name", [("regression", "native_level"),
@@ -88,6 +110,8 @@ def test_actual_CLI_keeps_point_threshold_label_and_resolved_claims(tmp_path, mo
     unit.task["target"]["label_assertions"] = {"up": "greater than 1%",
         "flat": "between -1% and 1%", "down": "less than -1%"}
     monkeypatch.setattr(agent, "Planner", lambda unit, seed: plan)
+    for name in ("BAND_SCALE", "YIELD_BAND_SCALE", "CLASS_BAND_SCALE"):
+        monkeypatch.setattr(agent, name, 1.0)
     monkeypatch.setattr(cli, "load_unit", lambda task_path, corpus_dir: unit)
     out = tmp_path / "answer.json"
     answer = cli.run(tmp_path / "task.json", tmp_path / "corpus", out,

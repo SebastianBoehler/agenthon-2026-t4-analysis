@@ -44,12 +44,12 @@ REASONS_RESERVE = 2  # held back from launches once covered, so one failed reaso
 REASONS_ATTEMPTS = 3  # while budget and the reasons window allow; a failed call costs only its request
 REASONS_HEDGE = 2  # reasons calls in flight at once
 REASONS_MIN_WINDOW = 30.0  # seconds before reasons_stop: a late reasons call still gets a short timeout
-# Preserve pooled sample intervals and the corpus-derived floor without learned rescaling.
-# These identity values are chosen independently of realized outcomes. The former values
-# and their practice/private selection history remain disclosed in ARTIFACT_PROVENANCE.md.
-BAND_SCALE = 1.0
-YIELD_BAND_SCALE = 1.0
-CLASS_BAND_SCALE = 1.0
+# One global widening of numeric bands about their points: sampled House bands are overconfident.
+# Fitted by a frozen rule on the public practice units' first-published outcomes (organizer
+# exception, issue #24); selection and provenance are in ARTIFACT_PROVENANCE.md.
+BAND_SCALE = 2.3
+YIELD_BAND_SCALE = 2.3
+CLASS_BAND_SCALE = 2.3
 COVER_MIN_WINDOW = 60.0  # seconds before hard_stop in which a call for an uncovered entity still launches
 ANSWER_BYTES_CAP = 2900  # the reasoning grader reads at most 3000 bytes of per-entity answers
 MAX_FULL_GROUPS = 16

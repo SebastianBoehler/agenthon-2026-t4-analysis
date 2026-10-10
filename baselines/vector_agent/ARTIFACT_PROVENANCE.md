@@ -1,9 +1,10 @@
 ## Executive summary
 
-This record accompanies the vector-agent build source. On 10 October 2026,
-all three global interval multipliers were replaced with identity values (1.0).
-This choice preserves pooled model intervals and the existing corpus-derived floor
-without empirical rescaling. It does not depend on prediction accuracy.
+This record accompanies the vector-agent build source. Later on 10 October 2026
+the three global interval multipliers were set to one value, 2.3, under the
+organizer's practice-unit exception (see "Practice-unit band multiplier" below).
+An earlier revision the same day had set them to identity (1.0); that state is
+superseded and its history is kept below.
 
 Optional reasons also use the published Unicode detection, content-duplicate and
 URI evidence-masking checks. Those corrections address reproduced contract failures;
@@ -167,3 +168,34 @@ Selection uses quotation fidelity and original-coordinate correctness, without
 outcomes or performance scores. Repeated quotations remain ambiguous; document-ID
 fallback and occurrence order are unchanged. Production frequency, NLI effects and
 forecast gains remain unmeasured. This source change does not publish a new image.
+
+## Practice-unit band multiplier (10 October 2026, supersedes the identity values)
+
+Route: the organizer's practice-unit exception in
+[issue #24](https://github.com/Agenthon-2026/track4-analysis-public/issues/24#issuecomment-6090644107).
+Only public practice-unit outcomes were used; no research-set outcome or
+Development score selected the value.
+
+- Forecasts: three fresh full runs of source 66388d6 on the ten practice units,
+  through a hosted Nemotron 3 Super stand-in for the House (not House parity).
+- Outcomes, retrieved 7 October 2026 from the primary publishers: U.S. Treasury
+  auction results and daily par yields with ALFRED first-release vintages
+  (auction, both FOMC units), ALFRED first-release vintages (CPI components,
+  macro revisions), and originally filed SEC 8-K/10-Q figures (bank EPS growth,
+  EPS year over year). These seven units have first-published values documented.
+  CFTC COT positions (release date unverified) and Nasdaq closes (no
+  first-version record) were used only in a second, all-unit check.
+- Rule, frozen before the runs: one multiplier m in 0.5..3.0 applied to every
+  numeric band about its point; J(m) = mean over units of log(IS(m)/IS(1)), with
+  IS the interval score at alpha = 0.10. Adopt the argmin only if J <= log(0.95),
+  at least two thirds of units improve, and no leave-one-unit-out argmin falls on
+  the other side of 1, both on the seven documented units and on all nine; use the
+  documented units' argmin.
+- Result: documented units m* = 2.3, J = -0.243, 5 of 7 improved, leave-one-out
+  1.7 to 2.5; all nine m* = 2.4, J = -0.263, 7 of 9 improved. Adopted 2.3.
+  The gain is concentrated in yield, return and growth targets, where 90% bands
+  covered far less than 90%; two units with well-calibrated bands score worse.
+
+The multiplier applies after the corpus volatility floor. Probability and
+pure-label placeholder bands are unchanged. Transfer to unseen Final families
+is assumed from the general overconfidence of sampled model intervals, not shown.

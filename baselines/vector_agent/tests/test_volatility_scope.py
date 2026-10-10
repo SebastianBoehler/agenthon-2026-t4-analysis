@@ -56,7 +56,8 @@ def test_native_forecast_floor_uses_the_entity_history(case):
         plan.samples[eid] = [Sample(eid, 0, -.01, .01, None, None, None, "Invented sample")]
     stopped = agent.Schedule(launch_stop=-1, hard_stop=0, reasons_stop=-1, workers=1)
     budget = Budget()
-    with patch.object(agent, "Planner", lambda unit, seed: plan):
+    with patch.object(agent, "Planner", lambda unit, seed: plan), \
+            patch.object(agent, "YIELD_BAND_SCALE", 1.0):  # the floor itself, before global widening
         results, actual = agent.forecast(unit, None, budget, time.monotonic(), stopped)
     assert actual is plan and budget.used == 0 and not plan.trace.launched
     for eid, result in results.items():
