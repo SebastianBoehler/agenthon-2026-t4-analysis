@@ -160,8 +160,10 @@ def _id_resolver(entity_ids: set[str]):
 
 def to_sample(item: dict, *, target_type: str, labels: list[str], entity_ids: set[str],
               weight: float, source: str, resolve=None, only: str | None = None) -> Sample | None:
-    """``only``: the one entity a single-entity prompt asked for (its echoed id is not required)."""
-    eid = only or (resolve or _id_resolver(entity_ids))(item.get("entity_id"))
+    """``only`` supplies an omitted id; an explicit id must resolve to a requested entity."""
+    eid = (only if "entity_id" not in item else None)
+    if eid is None:
+        eid = (resolve or _id_resolver(entity_ids))(item.get("entity_id"))
     if eid is None or eid not in entity_ids:
         return None
     point = number(item.get("point_forecast"))

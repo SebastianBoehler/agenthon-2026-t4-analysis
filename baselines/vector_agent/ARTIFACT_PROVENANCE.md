@@ -106,6 +106,13 @@ Task definitions and invented production-path controls select this correction;
 no resolving values, model replies, outcomes or performance scores were used.
 Negative-base conventions and unrecognized paraphrases remain limitations.
 
+A separate parser correction binds explicit reply IDs to the requested roster.
+A single-entity reply may omit its ID, but an explicit foreign or invalid ID is
+rejected instead of being reassigned to the requested entity. Existing canonical
+ID matching remains. Invented parser and actual Planner-job controls select this
+correction without saved replies, outcomes or scores. Its production frequency
+and predictive effect remain unmeasured; earlier frozen images are unchanged.
+
 The reasons correction starts from `a017121b45344c2c9ca04b7d0bd9d895d8e4b67e`.
 Synthetic controls reproduce three defects with the published 5.3 advisory rail:
 an invisible-character deny-list bypass, normalized content duplicates, and cited
