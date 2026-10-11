@@ -10,6 +10,7 @@ the route that selected each one:
 | Forecast workers / reasons window | 8 workers; collection stops at reasons_latest once every entity has 3 samples | Resource grounds ("Request concurrency" below) |
 | Growth recompute, report-comparative contract, entity identity, volatility scoping, quotation fidelity, reasons text rules | as documented | Code correctness on synthetic controls (sections below) |
 | Rejected on practice outcomes (negative evidence, not vetoes) | thinking mode; latest-level baseline prompt; shrinking points toward the naive point; per-sample pooling and band-outlier alternatives | Private study files (dated plans and results) |
+| Rejected on a local reasoning proxy (no outcomes) | driver-assigned reasons prompts (three variants, 11 October) | Private study file; see "Reasons proxy study" below |
 
 Every practice-based choice names its units, outcome sources and retrieval dates in its
 section. Private research scores and Development scores never select Final code. Earlier
@@ -244,3 +245,15 @@ its bar and its alternatives were written down (private plan file) before the ru
 - Limits: evidence is one unit of eight rows; two entities stay far from their outcomes
   in every sample because the model does not strip one-time items. Transfer to other
   growth families (revenue growth, other quarters) is assumed from the mechanism, not shown.
+
+## Reasons proxy study (11 October 2026)
+
+Rationale route only; no outcomes, Development scores or private reference files were
+used. A local proxy of the published reasoning rubric (an open judge model, hidden-style
+target reasons generated per unit from the task and pre-cutoff corpus, five votes) graded
+the current reasons step at 0.90 to 0.93 on sixteen units (ten practice, six private
+task-and-corpus-only). Three prompt variants that assign the task's named drivers to the
+three reasons were compared in paired reasons-only reruns under a rule frozen in advance
+(+0.03 mean, at least 10 of 16 units, no fewer three-reason units). None passed; the best
+gain was within the proxy's rerun noise. The reasons step is unchanged. The proxy is not
+the organizer's panel and establishes no official reasoning score.
