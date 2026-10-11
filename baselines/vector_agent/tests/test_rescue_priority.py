@@ -61,3 +61,32 @@ def test_inflight_or_retired_group_cannot_be_rescued(retired):
     else:
         plan.inflight["g0"] = 1
     assert plan.next_job(budget_left=1) is None
+
+
+def test_slow_house_relaunches_after_the_first_wave_once_ready():
+    """A House whose calls take ~200 s (p75) used to stop after its first wave of workers."""
+    import time
+    from pathlib import Path
+    from baselines.vector_agent.agent import Schedule, forecast
+    from baselines.vector_agent.house import Budget
+    from baselines.vector_agent.tests.fake_chat import FakeChat
+    from baselines.vector_agent.unit import load_unit
+
+    root = Path(__file__).resolve().parents[3] / "units" / "t4-auction-btc-202411-us7"
+    unit = load_unit(root / "task.json", root / "corpus")
+    f = 1 / 100  # the 600 s schedule at 1/100 scale
+    sched = Schedule(**{k: (v * f if isinstance(v, float) and k != "request_timeout" else v)
+                        for k, v in Schedule().__dict__.items()})
+    sched.request_timeout = 3.0
+
+    class Slow(FakeChat):
+        lat = [0.3, 0.4, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5]  # two quick replies, then p75 above 2.0 s (200 s scaled)
+
+        def complete(self, system, user, **kw):
+            with self.lock:
+                i = self.calls
+            self.delay = self.lat[i] if i < len(self.lat) else 0.3
+            return super().complete(system, user, **kw)
+
+    _, plan = forecast(unit, Slow(), Budget(), time.monotonic(), sched)
+    assert plan.trace.launched["unit"] > sched.workers  # a second wave launched

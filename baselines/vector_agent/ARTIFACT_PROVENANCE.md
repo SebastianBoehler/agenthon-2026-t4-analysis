@@ -7,7 +7,7 @@ the route that selected each one:
 |---|---|---|
 | Numeric band multiplier (`BAND_SCALE`, `YIELD_BAND_SCALE`, `CLASS_BAND_SCALE`) | 2.3 | Practice-unit exception, frozen rule, 10 October ("Practice-unit band multiplier" below) |
 | Revision-direction labels (`revisions.py`) | same-stage vintage majority | Practice-unit exception, bar fixed 7 October ("Revision-direction labels" below) |
-| Forecast workers / reasons window | 8 workers; collection stops at reasons_latest once every entity has 3 samples | Resource grounds ("Request concurrency" below) |
+| Forecast workers / reasons window | 8 workers; collection stops at reasons_latest once every entity has 3 samples; extras may launch if they should finish by 360 s once ready | Resource grounds ("Request concurrency" and "Slow-House extras" below) |
 | Growth recompute, report-comparative contract, entity identity, volatility scoping, quotation fidelity, reasons text rules | as documented | Code correctness on synthetic controls (sections below) |
 | Rejected on practice outcomes (negative evidence, not vetoes) | thinking mode; latest-level baseline prompt; shrinking points toward the naive point; per-sample pooling and band-outlier alternatives | Private study files (dated plans and results) |
 | Rejected on a local reasoning proxy (no outcomes) | driver-assigned reasons prompts (three variants, 11 October) | Private study file; see "Reasons proxy study" below |
@@ -257,3 +257,18 @@ three reasons were compared in paired reasons-only reruns under a rule frozen in
 (+0.03 mean, at least 10 of 16 units, no fewer three-reason units). None passed; the best
 gain was within the proxy's rerun noise. The reasons step is unchanged. The proxy is not
 the organizer's panel and establishes no official reasoning score.
+
+## Slow-House extras (11 October 2026)
+
+Resource grounds only; no outcomes or scores. Launch times reconstructed from saved call
+logs showed that in full-context units with p75 latency above about 200 s only the first
+wave of eight calls ever launched (minimum 3 to 8 samples per entity, 5 to 8 of 24
+requests used): the launch gate reserved a reasons slot of 1.25 x p75 on top of the call
+itself, which the 10 October stop rule already guarantees by ending collection at
+reasons_latest. Once every entity is ready, a call may now also launch if it should
+finish by 360 s (scaled with the card timeout); the earlier gates still apply otherwise.
+A synthetic control reproduces the missing second wave. A paired run on the eight
+slowest units (frozen bar: more samples in at least 5 of 8, every unit within 510 s, no
+fewer reasons, no degraded entity) passed with more samples in 5 of 8. The hosted
+stand-in was fast that day, so the gate bound mainly on the two revision units; its
+effect on forecast quality is not measured.

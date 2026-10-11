@@ -76,6 +76,7 @@ class Schedule:
     request_timeout: float = 240.0
     workers: int = 8  # a slow House otherwise leaves most of the 25 admitted requests unused
     extras_stop: float = 200.0  # extras before any latency is observed
+    extras_finish: float = 360.0  # once every entity is ready, an extra may launch if it should finish by then
 
     @classmethod
     def for_unit_timeout(cls, timeout_sec: float | None) -> "Schedule":
@@ -425,6 +426,11 @@ def forecast(unit: Unit, chat: Chat, budget: Budget, start: float, schedule: Sch
                 reasons_slot = max(REASONS_MIN_WINDOW, 1.25 * p75)
                 launch_ok = launch_ok and now + 1.25 * p75 + reasons_slot <= schedule.reasons_stop
                 extras = launch_ok and now + 1.25 * p75 < schedule.reasons_latest
+                if ready and now < schedule.max_launch and now + 1.25 * p75 <= schedule.extras_finish:
+                    # Collection already ends at reasons_latest once every entity is ready, which keeps
+                    # the reasons window; the reasons-slot term above would also stop a slow House
+                    # (p75 > 200 s) from ever launching past its first wave, leaving most requests unused.
+                    launch_ok = extras = True
             else:
                 launch_ok, extras = now < schedule.launch_stop, now < schedule.extras_stop
             if plan.uncovered() and schedule.hard_stop - now >= COVER_MIN_WINDOW:
