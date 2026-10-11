@@ -57,6 +57,7 @@ COVER_MIN_WINDOW = 60.0  # seconds before hard_stop in which a call for an uncov
 ANSWER_BYTES_CAP = 2900  # the reasoning grader reads at most 3000 bytes of per-entity answers
 MAX_FULL_GROUPS = 16
 MAX_PROMPT_CHARS = 120_000  # cohort and unit-wide prompts are cut to this before sending
+SHRINK_MAX = 2  # a retrieval prompt that keeps timing out is halved at most twice
 
 
 @dataclass
@@ -141,6 +142,7 @@ class Planner:
         self.cohort_rankings: list[list[str]] = []
         self.cohort_prompt: str | None = None
         self.retired: set[int] = set()  # full-context groups split after a timed-out call
+        self.timeouts: Counter = Counter()  # retrieval-mode prompts halved after a timed-out call
         n = max(1, len(self.ids))
         if self.full:
             self.groups = _chunks(self.ids, max(GROUP_MAX_FULL, -(-n // MAX_FULL_GROUPS)))
@@ -291,6 +293,23 @@ class Planner:
             self.group_prompts.append(prompts.unit_prompt(self.unit, self.docs_full, half))
         self.trace.notes.append(f"g{idx}: timed out, split into halves")
 
+    def _shrink(self, job: Job) -> None:
+        """A retrieval-mode call that timed out halves the evidence of its prompt for later
+        attempts (at most twice): the same prompt is likely to outlast the timeout again, and
+        rescue only follows once the group's attempts are spent."""
+        if self.full or job.kind not in ("group", "entity"):
+            return
+        if job.key.startswith("g") and job.key[1:].isdigit():
+            idx = int(job.key[1:])
+            if self.timeouts[job.key] < SHRINK_MAX and idx < len(self.group_prompts):
+                self.group_prompts[idx] = prompts.shrink_evidence(self.group_prompts[idx], 0.5)
+                self.timeouts[job.key] += 1
+                self.trace.notes.append(f"{job.key}: timed out, evidence halved")
+        elif job.key in self.entity_prompts and self.timeouts[job.key] < SHRINK_MAX:
+            self.entity_prompts[job.key] = prompts.shrink_evidence(self.entity_prompts[job.key], 0.5)
+            self.timeouts[job.key] += 1
+            self.trace.notes.append(f"{job.key}: timed out, evidence halved")
+
     def uncovered(self) -> bool:
         return any(not self.samples[eid] for eid in self.ids)
 
@@ -305,6 +324,7 @@ class Planner:
             self.trace.failures.append(f"{job.key}: {error}")
             if "timed out" in str(error).lower() or "timeout" in str(error).lower():
                 self._split(job)
+                self._shrink(job)
             return
         if job.kind == "cohort":
             count, ranking = cohort.parse(raw, set(self.ids))

@@ -90,3 +90,26 @@ def test_slow_house_relaunches_after_the_first_wave_once_ready():
 
     _, plan = forecast(unit, Slow(), Budget(), time.monotonic(), sched)
     assert plan.trace.launched["unit"] > sched.workers  # a second wave launched
+
+
+def test_retrieval_prompt_that_times_out_is_halved_until_it_fits():
+    """A House that times out every prompt above a size limit leaves no retrieval entity uncovered."""
+    import time
+    from pathlib import Path
+    from baselines.vector_agent.agent import Schedule, forecast
+    from baselines.vector_agent.house import Budget
+    from baselines.vector_agent.tests.fake_chat import FakeChat
+    from baselines.vector_agent.unit import load_unit
+
+    root = Path(__file__).resolve().parents[3] / "units" / "t4-eps-growth-2024Q3-banks"
+    unit = load_unit(root / "task.json", root / "corpus")
+    sched = Schedule()  # the real deadlines; synthetic replies return at once, so the run takes seconds
+
+    class SizeLimited(FakeChat):
+        def complete(self, system, user, **kw):
+            if len(user) > 40_000:
+                raise TimeoutError("synthetic timeout: prompt too large for the window")
+            return super().complete(system, user, **kw)
+
+    results, plan = forecast(unit, SizeLimited(), Budget(), time.monotonic(), sched)
+    assert all(plan.samples[eid] for eid in plan.ids), {e: len(s) for e, s in plan.samples.items()}

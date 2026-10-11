@@ -272,3 +272,16 @@ slowest units (frozen bar: more samples in at least 5 of 8, every unit within 51
 fewer reasons, no degraded entity) passed with more samples in 5 of 8. The hosted
 stand-in was fast that day, so the gate bound mainly on the two revision units; its
 effect on forecast quality is not measured.
+
+## Retrieval timeouts (11 October 2026)
+
+Correctness and resource grounds; no outcomes. A synthetic House with pessimistic
+latency (lognormal, median 150 s scaled by prompt size, 240 s call timeout) left two
+entities each without any forecast in four retrieval-mode units, because a group prompt
+that timed out was relaunched unchanged until its attempts ran out. A call that times out
+in retrieval mode now halves its prompt's evidence for later attempts, at most twice,
+mirroring the existing HTTP 400 retry and the full-context split. Under the same stress
+the degraded entities fell from eight to none with every unit finishing within 491 s; a
+paired live run on three retrieval units had no timeouts and was unchanged. A synthetic
+control reproduces the uncovered entities without the change. The real House's latency
+profile is unknown, so the frequency of this path in the Final is not established.
