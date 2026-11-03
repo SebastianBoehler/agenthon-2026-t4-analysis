@@ -40,6 +40,13 @@ The image is built from `main` with [`baselines/Dockerfile.vector`](baselines/Do
 agent's Python sources (standard library only), the provenance record and the licence. It bundles no
 model, weights or data.
 
+**Published image.** The prebuilt image is public on GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/sebastianboehler/vector-7c42:vector-rc23-629bc4c-amd64
+# digest sha256:4d021cbdb8d83892632c7c3bbee05ce9f780f29fb66fad909d1c4698afbf0cba
+```
+
 **Build and inspect the image**
 
 ```bash
