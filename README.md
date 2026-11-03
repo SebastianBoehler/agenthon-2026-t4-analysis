@@ -1,33 +1,99 @@
-## Executive summary (read this first)
+# Agenthon 2026, Track 4 (Explainability): Proof of Alpha
 
-This personal fork contains a participant agent for Track 4: predict a label, value or ordering from a table and frozen text evidence. Start here for local work. Current published official scoring is5.3.0, effective9October2026 22:11UTC; recheck before Final freeze. The retained local scorer package is a historical3.1.0 reference. Local mock checks measure wiring and evidence handling, not predictive quality or official rank. Public units carry no outcomes, naive answers or Final judge feedback. Current challenge rules come from the versioned organizer sources linked below.
+My participant code for **Proof of Alpha** (a one-person team) in [Agenthon 2026](https://www.agenthon.net/) Track 4.
+The task gives an agent a table of entities and a set of dated, pre-cutoff documents (filings, macro
+releases, auction and positioning reports). For each entity, the agent forecasts a value, a label and
+an interval, and backs them with claims quoted word for word from the documents and short reasons.
 
-## Current challenge contract
+**Final result: 2nd of 63 teams in Track 4** (Final score 0.4857,
+[official leaderboard](https://www.agenthon.net/#leaderboard)).
 
-Read the [official participant guide](https://github.com/Agenthon-2026/track4-analysis-public/blob/11852111d268766fef7772ce5edfaccc1718c763/README.md), [submission runtime](https://github.com/Agenthon-2026/track4-analysis-public/blob/11852111d268766fef7772ce5edfaccc1718c763/SUBMISSION_CLI.md), [training policy](https://github.com/Agenthon-2026/track4-analysis-public/blob/11852111d268766fef7772ce5edfaccc1718c763/docs/TRAINING-POLICY.md), [House guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/bd01548e34d21fd660d88fd06157078fb25ece4e/docs/HOUSE-MODEL.md) and [Development runtime](https://github.com/Agenthon-2026/Agenthon2026-public/blob/bd01548e34d21fd660d88fd06157078fb25ece4e/docs/DEVELOPMENT-RUNTIME.md). Do not replace those rules with the historical local scorer's formulas or old faithfulness admission threshold. Current faithfulness uses per-claim penalties. The [organizer clarification](https://github.com/Agenthon-2026/track4-analysis-public/issues/23#issuecomment-5985154828) explains task semantics, available feedback and cutoff-valid training labels.
+The winning agent is [`baselines/vector_agent`](baselines/vector_agent/README.md). Everything else in
+this repository comes from the organisers' public starter kit
+([Agenthon-2026/track4-analysis-public](https://github.com/Agenthon-2026/track4-analysis-public)):
+public example units, the reference baselines, the local scorer and the checkers.
 
-The mounted task prompt, target, label assertions and entity table define the requested units, horizon and ranking direction. Do not infer direction from a generic rank convention. The public units are examples, not a representative evaluation population. A model response, schema check or exact quotation does not establish forecast quality. Keep complete-roster failures and weak cohorts visible when comparing candidates.
+## How the agent works
 
-## Participant implementation
+1. **Evidence.** Small corpora go into the prompt whole; large filings are cut to BM25 and
+   finance-anchored excerpts per entity. Each document also gets an arithmetic summary of its tables
+   (last value, changes, random-walk spread over the horizon, revision sizes).
+2. **Repeated forecasts.** The organiser-provided model (the "House", Nemotron 3 Super) is sampled
+   several times per entity. The prompt starts from the naive carry-forward value, forecasts levels
+   before changes and estimates a band from comparable past surprises.
+3. **Deterministic aggregation.** Points are weighted medians of the samples, labels are weighted votes,
+   and intervals come from the pooled sample distribution. Task-specific rules handle event counts,
+   threshold labels, revision directions, growth targets and basis-point changes.
+4. **Grounded explanations.** Claims are exact slices of admitted documents with verified offsets.
+   Reasons each quote a verbatim premise and cite up to three supporting passages, and they pass
+   shape and deny-list checks before going into the answer.
+5. **Time budget.** Requests, concurrency and deadlines are scheduled to fit the 600-second card. An
+   entity with no model reply gets an explicit, disclosed carry-forward fallback.
 
-The recovered participant candidate is [vector_agent](baselines/vector_agent/README.md). It combines House forecasts, selects exact evidence spans and requests grounded reasons. The user-approved degraded recovery covers missing forecasts and failed self-validation, with explicit evidence-trace disclosure. Its [artifact provenance](baselines/vector_agent/ARTIFACT_PROVENANCE.md) discloses historical private-score choices and their outcome-independent interval correction. The older [strong_rag_baseline](baselines/strong_rag_baseline/README.md) remains a reference implementation.
+The [agent README](baselines/vector_agent/README.md) gives every rule in detail.
+[ARTIFACT_PROVENANCE.md](baselines/vector_agent/ARTIFACT_PROVENANCE.md) records how each constant was
+chosen and what data each choice used.
+
+## Reproducing the submission
+
+The Final upload's source is commit `629bc4cddc7fd98ab510cc400072f14e5e811147` (the head of `main`,
+11 October, before the Final opened on 13 October), built with [`baselines/Dockerfile.vector`](baselines/Dockerfile.vector). The image contains only the
+agent's Python sources (standard library only), the provenance record and the licence. It bundles no
+model, weights or data.
+
+**Build and inspect the image**
 
 ```bash
-python -m baselines.strong_rag_baseline.cli analyze \
-  --task units/t4-EXAMPLE-eps-beat/task.json \
-  --corpus units/t4-EXAMPLE-eps-beat/corpus \
-  --out /tmp/t4-answer.json --mock
+git clone https://github.com/SebastianBoehler/agenthon-2026-t4-analysis
+cd agenthon-2026-t4-analysis
+git checkout 629bc4cddc7fd98ab510cc400072f14e5e811147
+docker buildx build --platform linux/amd64 -f baselines/Dockerfile.vector -t t4-vector --load .
+docker run --rm t4-vector            # prints the analyze interface
 ```
 
-The mock returns synthetic values for offline tests. House access is injected during evaluated runs; a local credential cannot enable it. Local diagnostic servers are independent of official House evidence. The [local interface](SUBMISSION_CLI.md) and [configuration source](baselines/strong_rag_baseline/config.py) describe implementation settings. Build context contains runtime sources, provenance and license; tests, bytecode, outputs and private workspace files do not belong in a candidate image.
-
-## Checks and exploration
+**Run it on a unit.** Create an output folder first (`mkdir -p out`). The agent calls an OpenAI-compatible chat endpoint. In the official evaluation
+the organisers inject the House route. To run it yourself, point it at any endpoint serving the same
+model, for example NVIDIA Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`) on OpenRouter:
 
 ```bash
-python -m pytest baselines -q
-python .github/validate_units.py analysis --stdlib-only
+docker run --rm \
+  -e MODEL_ENDPOINT=https://openrouter.ai/api \
+  -e MODEL_NAME=nvidia/nemotron-3-super-120b-a12b \
+  -e MODEL_TOKEN=$OPENROUTER_API_KEY \
+  -v "$PWD/units/t4-credit-event-2023:/input:ro" -v "$PWD/out:/output" \
+  t4-vector analyze --task /input/task.json --corpus /input/corpus/ --out /output/answer.json
 ```
 
-Import shared toolkit checks and scoring primitives; never duplicate scoring math. Use the current official checker when assessing current claim rules. The retained local `qfbench2_track_analysis` and `faithfulness` packages preserve earlier reproducibility; their smoke scores are historical diagnostics. They are not a production gate for current candidates.
+The agent sends `POST $MODEL_ENDPOINT/v1/chat/completions`. Without a reachable endpoint it still
+runs end to end: every entity gets the disclosed carry-forward fallback with quoted claims, which is a
+quick way to check the build and mounts. A hosted model differs from the House in
+provider, quantisation, latency and limits, so local answers will not match the official ones exactly,
+and the Final units are sealed. Local runs reproduce the method, not the official score.
 
-Correct schema/roster, eligible data, provenance, public safety, owned-job isolation and actual resource/request/output limits are validity controls. Top-K, chunk size, quote policy, local timeout/attempt cap, exact-output parity and no-family-regression are engineering or study choices. Do not turn them into unexplained hard vetoes on a distinct informative experiment. Freeze meaningful comparisons and assess mean, failures, weak cohorts and uncertainty. Publication, submission and registry access follow the user's explicit authority.
+**Tests.** The tests need the organisers' shared toolkit (`qfbench2_common`):
+
+```bash
+pip install pytest "git+https://github.com/Agenthon-2026/Agenthon2026-public#subdirectory=common"
+python -m pytest -p no:cases baselines/vector_agent -q
+```
+
+At commit `629bc4c` all 190 tests pass. They use synthetic entities and a fake House server, and need
+no network access or credentials.
+
+## Data and licences
+
+- My code is under the [MIT licence](LICENSE).
+- The example units, starter code and scorer are the organisers'. See
+  [DATA-LICENSE.md](DATA-LICENSE.md) and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- No credentials, protected outcomes, Final answers or private experiment records are in this
+  repository.
+- The model is not ours and is not redistributed here. Use it under its own licence and your
+  provider's terms.
+
+## Further reading
+
+- [docs/WORKING-NOTES.md](docs/WORKING-NOTES.md): the working README from the competition, kept unchanged.
+- [SUBMISSION_CLI.md](SUBMISSION_CLI.md): the container interface.
+- Organiser rules and runtime:
+  [participant guide](https://github.com/Agenthon-2026/track4-analysis-public/blob/11852111d268766fef7772ce5edfaccc1718c763/README.md),
+  [Development runtime](https://github.com/Agenthon-2026/Agenthon2026-public/blob/bd01548e34d21fd660d88fd06157078fb25ece4e/docs/DEVELOPMENT-RUNTIME.md).
