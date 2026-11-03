@@ -36,8 +36,7 @@ chosen and what data each choice used.
 
 ## Reproducing the submission
 
-The Final upload's source is commit `629bc4cddc7fd98ab510cc400072f14e5e811147` (the head of `main`,
-11 October, before the Final opened on 13 October), built with [`baselines/Dockerfile.vector`](baselines/Dockerfile.vector). The image contains only the
+The image is built from `main` with [`baselines/Dockerfile.vector`](baselines/Dockerfile.vector). It contains only the
 agent's Python sources (standard library only), the provenance record and the licence. It bundles no
 model, weights or data.
 
@@ -46,7 +45,6 @@ model, weights or data.
 ```bash
 git clone https://github.com/SebastianBoehler/agenthon-2026-t4-analysis
 cd agenthon-2026-t4-analysis
-git checkout 629bc4cddc7fd98ab510cc400072f14e5e811147
 docker buildx build --platform linux/amd64 -f baselines/Dockerfile.vector -t t4-vector --load .
 docker run --rm t4-vector            # prints the analyze interface
 ```
@@ -77,7 +75,7 @@ pip install pytest "git+https://github.com/Agenthon-2026/Agenthon2026-public#sub
 python -m pytest -p no:cases baselines/vector_agent -q
 ```
 
-At commit `629bc4c` all 190 tests pass. They use synthetic entities and a fake House server, and need
+All 190 tests pass. They use synthetic entities and a fake House server, and need
 no network access or credentials.
 
 ## Data and licences
